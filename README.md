@@ -22,7 +22,7 @@
 - [配置](#配置)
 - [扩展子技能](#扩展子技能)
 - [传输说明](#传输说明)
-- [贡献](#贡献)
+- [贡献（PR 提交规范）](#贡献)
 - [开源声明](#开源声明)
 - [License](#license)
 
@@ -179,46 +179,274 @@ Minis 内变快取决于宿主是否提供 withoutResponse / 批量写；**不�
 
 ## 贡献
 
-欢迎 Issue / PR。
+欢迎 Issue 与 Pull Request。下面是**本仓库**（`jiqimaooo/TodooCard_Skills_Minis`）的完整提交规范。  
+向上游 [OpenMinis/MinisSkills](https://github.com/OpenMinis/MinisSkills) 投稿时，还须遵守[官方 Checklist](https://github.com/OpenMinis/MinisSkills#submission-checklist)，见 [§ 与官方技能库](#与官方技能库-openminisminisskills)。
+
+### 1. 开始之前
+
+1. 先开 Issue 讨论（大改、新子技能、改传输协议时强烈建议）。  
+2. 小改动（错别字、注释、文档）可直接 PR。  
+3. 确认你的改动符合架构：
+
+| 规则 | 要求 |
+|------|------|
+| 安装入口 | 只有 `todoocard/`；不要在仓库根再挂第二个可导入 skill |
+| 子技能位置 | 一律 `todoocard/<sub-skill>/` |
+| 传输层 | 只维护在 `todoocard/scripts/` + `todoocard/references/` |
+| 禁止复制 | 子技能内不得再拷贝 `safe_send.py` / `image_to_payload.py` |
+| 配置 | 真实设备配置仅本地；仓库只保留 `config.example.json` |
+
+### 2. 分支命名
+
+从最新 `main` 拉分支：
+
+| 类型 | 分支名示例 |
+|------|------------|
+| 新功能 | `feat/weather-subskill` |
+| 修复 | `fix/ble-connect-retry` |
+| 文档 | `docs/install-screenshots` |
+| 重构 | `refactor/cli-paths` |
+| 杂项 | `chore/gitignore` |
 
 ```bash
 git clone https://github.com/jiqimaooo/TodooCard_Skills_Minis.git
 cd TodooCard_Skills_Minis
-git checkout -b feat/my-change
-# … 修改 …
-git add -A && git status   # 确认无 config.json / 密钥 / .bin.qlz
-git commit -m "Add …"
-git push -u origin HEAD
+git checkout main && git pull origin main
+git checkout -b feat/your-topic
 ```
 
-### 提交检查
+### 3. Commit 规范
 
-- [ ] 未提交真实 `config.json`、token、cookie、`.bin` / `.qlz`、预编译二进制  
-- [ ] 未复制父级传输脚本到子技能  
-- [ ] 新增子技能已更新父 `SKILL.md` 索引  
-- [ ] 推屏路径保持整帧、禁止半帧 resume  
-
-### 不要提交
+采用可读的 **Conventional Commits** 风格（中英文均可，推荐英文动词现在时）：
 
 ```text
-**/config.json
-**/*token* **/*secret* **/*cookie* **/*.env
-**/*.bin **/*.protocol.qlz **/*.log
-**/native_sender
-**/__pycache__/
+<type>(<scope>): <summary>
+
+[optional body: why / impact / risk]
 ```
 
-### 与 OpenMinis/MinisSkills
+| type | 用途 |
+|------|------|
+| `feat` | 新子技能、新用户可见能力 |
+| `fix` | 修 bug（花屏、连不上、文案错误等） |
+| `docs` | 仅 README / SKILL / protocol / 配图 |
+| `refactor` | 行为不变的结构整理 |
+| `perf` | 性能（需说明测量方式与是否影响兼容） |
+| `chore` | 工具、忽略规则、杂项 |
 
-| | 本仓库 | [MinisSkills](https://github.com/OpenMinis/MinisSkills) |
+| scope 示例 | 含义 |
+|------------|------|
+| `today-eats` | 仅子技能 |
+| `transport` / `ble` | 父级发送与转换 |
+| `docs` | 文档 |
+| `repo` | 仓库级配置 |
+
+**好的例子：**
+
+```text
+feat(today-eats): add prepare-only dry-run flag
+fix(ble): abort on disconnect without resume
+docs: expand PR submission guide
+```
+
+**避免：** `update`、`fix stuff`、`临时提交`、一次 commit 塞多个无关主题。
+
+提交前：
+
+```bash
+git add -A
+git status
+# 人工确认：没有 config.json / 密钥 / .bin / .qlz / native_sender 二进制 / __pycache__
+
+# 语法检查（按你改动的路径调整）
+python3 -m py_compile todoocard/scripts/*.py todoocard/today-eats/scripts/*.py
+
+git commit -m "feat(today-eats): …"
+```
+
+### 4. 可以提交 vs 禁止提交
+
+**可以：**
+
+- `todoocard/**` 源码与 `SKILL.md`
+- `config.example.json`（空或占位字段）
+- `docs/` 说明与已打码的示意图
+- `README.md` / `LICENSE` / `.gitignore`
+
+**禁止（PR 含这些会被要求改掉）：**
+
+```text
+**/config.json                 # 真实 device_id 等
+**/*token* **/*secret* **/*cookie* **/*.env
+**/*.bin **/*.protocol.qlz **/*.log **/*_report.json
+**/native_sender               # 预编译二进制（.swift 源码可以）
+**/__pycache__/ **/*.pyc
+```
+
+以及：API Key、账号 Cookie、个人手机号、可识别个人的轨迹/地址明细、未授权的第三方专有代码。
+
+### 5. 新增子技能（详细）
+
+```text
+todoocard/
+└── my-skill/                 # kebab-case
+    ├── SKILL.md              # 必填
+    ├── scripts/              # 可选
+    │   └── …
+    ├── references/           # 可选
+    └── assets/               # 可选
+```
+
+**`SKILL.md` 最低要求：**
+
+```yaml
+---
+name: my-skill
+description: >
+  做什么。何时触发（写上用户可能说的原话）。
+  父技能为 todoocard。
+---
+```
+
+正文建议包含：何时使用、命令/对话示例、步骤流程、如何调用父级传输、依赖。  
+推屏时引用父脚本（路径以子技能 `scripts/foo.py` 为基准）：
+
+```python
+from pathlib import Path
+import sys
+
+PARENT_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+# my-skill/scripts/foo.py → parents[2] == todoocard/
+sys.path.insert(0, str(PARENT_SCRIPTS))
+from image_to_payload import convert
+```
+
+**必须同步改的两处索引：**
+
+1. [`todoocard/SKILL.md`](todoocard/SKILL.md) 的「子技能」表  
+2. 本 README 的结构/特性表（若对外可见）
+
+**自测最低集：**
+
+- [ ] `python3 -m py_compile` 通过  
+- [ ] 有设备：整帧推送成功；断连后**不会**从中间 resume  
+- [ ] 无设备：至少 `prepare-only` / 出图路径可跑  
+- [ ] 未引入新的密钥或本机绝对路径（Minis 约定路径除外）
+
+### 6. 修改父级传输层（高风险）
+
+改 `todoocard/scripts/safe_send.py`、`image_to_payload.py`、协议文档时：
+
+- PR 标题/正文标明 **影响所有子技能**
+- 说明兼容性：旧配置是否仍可用、orientation / block_size 是否变化  
+- 禁止默认开启「半帧续传」「乱序并发写 FEF2」  
+- 若改 payload 格式：提供验证方式与回滚说明；未验证前不要当默认路径  
+- 建议在正文附上简短实测（块数、耗时、是否花屏）
+
+### 7. Pull Request 要求
+
+**标题：** 与 commit 类似，简洁说明意图。
+
+```text
+feat(today-eats): improve card layout spacing
+fix(ble): prevent resume after disconnect
+docs: detail PR submission guide
+```
+
+**正文模板（复制使用）：**
+
+```markdown
+## Summary
+- 做了什么（1–3 条）
+- 为什么（动机 / 用户问题）
+
+## Type
+- [ ] feat  - [ ] fix  - [ ] docs  - [ ] refactor  - [ ] perf  - [ ] chore
+
+## Scope
+- [ ] 仅文档
+- [ ] 仅子技能：`today-eats` / `________`
+- [ ] 父技能传输层（scripts / protocol）
+- [ ] 仓库级（README / CI / gitignore）
+
+## Changes
+- 关键文件或行为变化（可贴目录树）
+
+## Test plan
+- [ ] `python3 -m py_compile …`
+- [ ] `cli.py eat --prepare-only` 或等价路径
+- [ ] （有设备）整帧推送；断开不 resume
+- [ ] 未包含 config.json / 密钥 / bin / qlz
+
+## Checklist
+- [ ] 符合父/子架构，未复制传输层
+- [ ] 新增子技能已更新父 SKILL 索引
+- [ ] 无隐私与凭证
+- [ ] 未提交预编译 native_sender
+- [ ] （若改协议）已更新 `references/protocol.md`
+```
+
+**体积与历史：**
+
+- 不要把大图、视频、多次试验二进制打进 Git  
+- 配图放 `docs/images/`，注意压缩与打码  
+- 一个 PR 聚焦一个主题；大重构与行为修复拆开
+
+**Review 合并预期：**
+
+- 维护者会检查：架构、密钥、半帧风险、是否破坏导入路径  
+- 可能要求：补测试说明、改描述、拆 PR  
+- 合并后默认进 `main`；未声明的 breaking change 应在 Summary 置顶
+
+### 8. 完整提交前 Checklist
+
+**架构**
+
+- [ ] 只通过 `todoocard/` 作为可安装根  
+- [ ] 子技能在 `todoocard/<name>/` 且含 `SKILL.md`  
+- [ ] 传输代码仍在父级 `scripts/`  
+
+**安全 / 隐私**
+
+- [ ] 无真实 `config.json` / device_id  
+- [ ] 无 token、cookie、env 密钥  
+- [ ] 无 `.bin` / `.qlz` / 日志 / 预编译二进制  
+
+**质量**
+
+- [ ] commit message 符合 type(scope)  
+- [ ] `py_compile` 通过  
+- [ ] 推屏逻辑保持整帧、失败中止  
+- [ ] 文档与索引已更新（若需要）  
+
+**PR**
+
+- [ ] 标题清晰  
+- [ ] 正文含 Summary / Test plan / Checklist  
+- [ ] 与 `main` 无无关大段格式化 diff  
+
+### 9. 与官方技能库 OpenMinis/MinisSkills
+
+| | 本仓库 | [OpenMinis/MinisSkills](https://github.com/OpenMinis/MinisSkills) |
 |--|--------|--------|
-| 形态 | 父+子，便于扩展 | 一技能一顶层目录 |
-| 导入 | `…/tree/main/todoocard` | 合并后进官方列表 |
-| 规范 | 本文贡献一节 | 官方 README Checklist |
+| 形态 | 父+子，便于产品扩展 | **一技能一顶层目录**（flat） |
+| 导入 | `…/tree/main/todoocard` | 合并后出现在官方列表 |
+| 规范 | **本节全文** | 官方 README 的 Submission Checklist |
+| License | MIT | 仓库为 Apache-2.0，贡献需可兼容 |
 
-上游 PR：Fork → 只新增可安装的 `todoocard/` 包 → 无密钥 → Summary + Checklist + Test plan。
+**上游 PR 额外注意：**
+
+1. Fork 官方仓，从 `upstream/main` 开分支。  
+2. **只新增**一个顶层目录（推荐直接放可安装的 `todoocard/` 包）。  
+3. 满足官方：kebab-case、`name` + `description`（what + when）、正文宜 &lt; 500 行、scripts/references/assets、无密钥、可选 evals。  
+4. 不要把本仓库根 README 整本塞进官方仓；不要改他人技能。  
+5. 官方模型是 flat 安装：嵌套「第二个可注册 SKILL」可能不被工具识别——上游包应保证 **导入 `todoocard/` 即可用**。  
+6. PR 仍建议带：Summary、Layout 树、Checklist、Test plan。  
+
+本仓库可以更「产品化」；**官方仓以可合并、可单目录安装为第一约束**。
 
 ---
+
 
 ## 开源声明
 
