@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""TodooCard skill CLI — prepare / push images & templates to e-paper card."""
+"""TodooCard skill CLI — 今天吃点啥（附近随机外卖 → 电子纸）。"""
 from __future__ import annotations
 
 import argparse
 import json
-import math
 import random
 import shutil
 import subprocess
@@ -33,13 +32,13 @@ def load_cfg() -> dict:
         "device_name": "",
         "screen_orientation": "rotate-180-then-flip-horizontal",
         "block_size": 240,
+        "pace": 0.0,
+        "wait_refresh": 8.0,
+        "transport": "auto",
+        "native_binary": str(SCRIPTS / "native_sender"),
         "target": "t3",
         "size": "528x792",
         "send_policy": "full-frame-only-no-resume",
-        "pace": 0.0,
-        "wait_refresh": 40.0,
-        "transport": "auto",
-        "native_binary": "/var/minis/skills/todoocard/scripts/native_sender",
     }
     CFG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
     return cfg
@@ -55,7 +54,6 @@ def run(cmd: list[str], timeout: int = 120) -> dict:
     out = (p.stdout or "").strip()
     if not out:
         raise RuntimeError(f"empty: {' '.join(cmd)}\n{p.stderr}")
-    # may contain non-json prefix
     start = out.find("{")
     if start < 0:
         raise RuntimeError(out[:500])
@@ -104,7 +102,6 @@ def cmd_probe(args):
         print("FEF3", info.get("data"))
     except Exception as e:
         print("FEF3", e)
-    # block size via notify
     import threading
 
     box = {}
@@ -162,7 +159,6 @@ def prepare_image(src: Path, prefix: Path, orientation: str) -> dict:
     WORK.mkdir(parents=True, exist_ok=True)
     ATTACH.mkdir(parents=True, exist_ok=True)
     info = convert(str(src), str(prefix), orientation=orientation, make_preview=True)
-    # copy preview to attachments
     prev = Path(info["preview"])
     if prev.exists():
         dest = ATTACH / f"{prefix.name}_preview.png"
@@ -171,22 +167,15 @@ def prepare_image(src: Path, prefix: Path, orientation: str) -> dict:
     return info
 
 
-def push_payload(payload: Path, cfg: dict, block_size: int | None = None, pace: float | None = None, transport: str | None = None):
+def push_payload(payload: Path, cfg: dict) -> None:
     dev = cfg.get("device_id")
     if not dev:
         raise SystemExit("config missing device_id — run: todoocard_cli.py scan && probe --save")
 
-    selected = transport or cfg.get("transport") or "auto"
+    selected = cfg.get("transport") or "auto"
     native_bin = Path(cfg.get("native_binary") or (SCRIPTS / "native_sender"))
     if selected in {"auto", "native"} and native_bin.exists() and native_bin.is_file() and native_bin.stat().st_mode & 0o111:
-        cmd = [
-            str(native_bin),
-            "--payload",
-            str(payload),
-            "--compressed",
-            "--id",
-            dev,
-        ]
+        cmd = [str(native_bin), "--payload", str(payload), "--compressed", "--id", dev]
         print("exec native CoreBluetooth:", " ".join(cmd), flush=True)
         subprocess.check_call(cmd)
         return
@@ -195,9 +184,9 @@ def push_payload(payload: Path, cfg: dict, block_size: int | None = None, pace: 
             f"native sender not built: {native_bin}. Run build_native_sender.sh on macOS with Xcode/swiftc."
         )
 
-    bs = str(block_size or cfg.get("block_size") or 240)
-    pc = str(pace if pace is not None else cfg.get("pace") or 0.0)
-    wait_refresh = str(float(cfg.get("wait_refresh") or 40.0))
+    bs = str(cfg.get("block_size") or 240)
+    pc = str(cfg.get("pace") if cfg.get("pace") is not None else 0.0)
+    wait_refresh = str(float(cfg.get("wait_refresh") or 8.0))
     cmd = [
         sys.executable,
         str(SCRIPTS / "safe_send.py"),
@@ -212,31 +201,8 @@ def push_payload(payload: Path, cfg: dict, block_size: int | None = None, pace: 
         "--wait-refresh",
         wait_refresh,
     ]
-    # Prefer instrumented/pipelined fast_send when pushing from a source image path
-    # is not available here (payload already built). Keep safe_send as the
-    # block-stream engine.
-    print("exec CLI fallback:", " ".join(cmd), flush=True)
+    print("exec CLI:", " ".join(cmd), flush=True)
     subprocess.check_call(cmd)
-
-
-def cmd_push(args):
-    cfg = load_cfg()
-    src = Path(args.input)
-    if not src.exists():
-        raise SystemExit(f"missing image: {src}")
-    orient = args.orientation or cfg.get("screen_orientation") or "rotate-180-then-flip-horizontal"
-    WORK.mkdir(parents=True, exist_ok=True)
-    prefix = WORK / (args.prefix or f"push_{datetime.now().strftime('%H%M%S')}")
-    print("convert", src, "orient", orient)
-    info = prepare_image(src, prefix, orient)
-    print(json.dumps({k: info[k] for k in info if k != "codes"}, ensure_ascii=False, indent=2))
-    # also copy source-ish card if png
-    if src.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
-        shutil.copy(src, ATTACH / f"{prefix.name}_source{src.suffix.lower()}")
-    if args.prepare_only:
-        print("prepare-only done")
-        return
-    push_payload(Path(info["qlz"]), cfg, args.block_size, args.pace, args.transport)
 
 
 def search_nearby_food(lat: float, lon: float, radius: int = 2500) -> list[dict]:
@@ -303,7 +269,7 @@ def search_nearby_food(lat: float, lon: float, radius: int = 2500) -> list[dict]
     return list(all_places.values())
 
 
-def pick_dinner(places: list[dict], max_m: float = 2800) -> dict:
+def pick_place(places: list[dict], max_m: float = 2800) -> dict:
     exclude = ["咖啡", "茶饮", "奶茶", "酒吧", "KTV", "酒店", "超市", "便利店", "加油站", "不对外开放"]
     cands = []
     for it in places:
@@ -311,12 +277,9 @@ def pick_dinner(places: list[dict], max_m: float = 2800) -> dict:
         if any(k in name for k in exclude):
             continue
         dist = it.get("distance_m")
-        if dist is None:
-            continue
-        if dist > max_m:
+        if dist is None or dist > max_m:
             continue
         cands.append(it)
-    # unique by name nearest first
     seen = set()
     uniq = []
     for it in sorted(cands, key=lambda x: x.get("distance_m") or 1e9):
@@ -326,11 +289,11 @@ def pick_dinner(places: list[dict], max_m: float = 2800) -> dict:
         uniq.append(it)
     if not uniq:
         raise SystemExit("no nearby restaurants found")
-    pool = uniq[:60]
-    return random.choice(pool)
+    return random.choice(uniq[:60])
 
 
-def cmd_dinner(args):
+def cmd_eat(args):
+    """今天吃点啥：附近随机外卖 → 卡片 → 推送到土豆片。"""
     cfg = load_cfg()
     print("location…")
     loc = run(["apple-location", "current", "--accuracy", "km", "--compact"])
@@ -342,52 +305,26 @@ def cmd_dinner(args):
     places = search_nearby_food(lat, lon, radius=args.radius)
     WORK.mkdir(parents=True, exist_ok=True)
     (WORK / "food_places.json").write_text(json.dumps(places, ensure_ascii=False, indent=2))
-    pick = pick_dinner(places, max_m=args.max_distance)
+    pick = pick_place(places, max_m=args.max_distance)
     pick_path = WORK / "food_pick.json"
     pick_path.write_text(json.dumps(pick, ensure_ascii=False, indent=2))
     print("PICK", pick.get("name"), pick.get("distance_m"), "m", pick.get("_query"))
 
-    # render premium template
-    from dinner_template import render
+    from meal_template import render
 
-    card = ATTACH / "dinner_card.png"
-    render(pick, card, meal_override=args.meal)
+    card = ATTACH / "eat_card.png"
+    render(pick, card)
     print("card", card)
 
     if args.prepare_only or args.no_send:
-        # still convert preview
         orient = cfg.get("screen_orientation") or "rotate-180-then-flip-horizontal"
-        info = prepare_image(card, WORK / "dinner_push", orient)
+        info = prepare_image(card, WORK / "eat_push", orient)
         print("preview", info.get("preview_attach"))
         return
 
-    # push via template helper path
     orient = cfg.get("screen_orientation") or "rotate-180-then-flip-horizontal"
-    info = prepare_image(card, WORK / "dinner_push", orient)
-    shutil.copy(info["preview"], ATTACH / "dinner_card_preview.png")
-    push_payload(Path(info["qlz"]), cfg)
-
-
-def cmd_weather(args):
-    cfg = load_cfg()
-    # weather_template has its own fetch+render; call functions
-    import weather_template as wt
-
-    print("fetch weather…")
-    payload = wt.fetch_weather()
-    WORK.mkdir(parents=True, exist_ok=True)
-    (WORK / "weather_payload.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2))
-    card = ATTACH / "weather_card.png"
-    wt.render(payload, card)
-    print("card", card)
-    if args.no_send or args.prepare_only:
-        orient = cfg.get("screen_orientation") or "rotate-180-then-flip-horizontal"
-        info = prepare_image(card, WORK / "weather_push", orient)
-        print("preview", info.get("preview_attach"))
-        return
-    orient = cfg.get("screen_orientation") or "rotate-180-then-flip-horizontal"
-    info = prepare_image(card, WORK / "weather_push", orient)
-    shutil.copy(info["preview"], ATTACH / "weather_card_preview.png")
+    info = prepare_image(card, WORK / "eat_push", orient)
+    shutil.copy(info["preview"], ATTACH / "eat_card_preview.png")
     push_payload(Path(info["qlz"]), cfg)
 
 
@@ -412,7 +349,7 @@ def cmd_config(args):
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="todoocard", description="TodooCard / Potato e-paper skill CLI")
+    ap = argparse.ArgumentParser(prog="todoocard", description="TodooCard · 今天吃点啥")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("scan", help="scan nearby TodooCard-like BLE devices")
@@ -433,28 +370,20 @@ def main():
     p.add_argument("--pace", type=float)
     p.set_defaults(func=cmd_config)
 
-    p = sub.add_parser("push", help="convert image and push to card")
-    p.add_argument("--input", "-i", required=True)
-    p.add_argument("--orientation")
-    p.add_argument("--prefix")
-    p.add_argument("--prepare-only", action="store_true")
-    p.add_argument("--block-size", type=int)
-    p.add_argument("--pace", type=float)
-    p.add_argument("--transport", choices=["auto", "native", "cli"], default=None)
-    p.set_defaults(func=cmd_push)
-
-    p = sub.add_parser("dinner", help="random nearby takeout meal → card → push")
-    p.add_argument("--meal", choices=["早餐", "午餐", "晚餐"], default=None, help="override meal label")
+    p = sub.add_parser("eat", help="今天吃点啥：附近随机外卖 → 卡片 → 推送")
     p.add_argument("--radius", type=int, default=2500)
     p.add_argument("--max-distance", type=float, default=2800)
     p.add_argument("--no-send", action="store_true")
     p.add_argument("--prepare-only", action="store_true")
-    p.set_defaults(func=cmd_dinner)
+    p.set_defaults(func=cmd_eat)
 
-    p = sub.add_parser("weather", help="current weather card → push")
+    # aliases
+    p = sub.add_parser("今天吃点啥", help="alias of eat")
+    p.add_argument("--radius", type=int, default=2500)
+    p.add_argument("--max-distance", type=float, default=2800)
     p.add_argument("--no-send", action="store_true")
     p.add_argument("--prepare-only", action="store_true")
-    p.set_defaults(func=cmd_weather)
+    p.set_defaults(func=cmd_eat)
 
     args = ap.parse_args()
     args.func(args)

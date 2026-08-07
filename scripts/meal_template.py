@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Premium dinner recommendation card for TodooCard 528×792 six-color e-paper."""
+"""今天吃点啥 — TodooCard 528×792 meal recommendation card."""
 from __future__ import annotations
 
 import argparse
@@ -131,19 +131,15 @@ def wrap_text(draw: ImageDraw.ImageDraw, text: str, font_obj, max_w: float) -> l
 
 
 def meal_period(hour: int | None = None) -> tuple[str, str, str]:
-    """Return Chinese meal label, English kicker, and default title."""
-    h = datetime.now().hour if hour is None else hour
-    if 5 <= h < 10:
-        return "早餐", "TODAY'S BREAKFAST", "早餐吃这个"
-    if 10 <= h < 15:
-        return "午餐", "TODAY'S LUNCH", "中午吃这个"
-    return "晚餐", "TODAY'S DINNER", "今晚吃这个"
+    """Always show unified meal title."""
+    return "今日", "TODAY'S EATS", "今天吃点啥"
+
 
 
 def category_style(cat: str) -> tuple[tuple[int, int, int], str]:
     m = {
         "米粉": (RED, "酸辣鲜香 · 一碗过瘾"),
-        "火锅": (RED, "热气腾腾 · 今晚放开吃"),
+        "火锅": (RED, "热气腾腾 · 放开吃"),
         "烧烤": (YELLOW, "炭火香气 · 配饮正好"),
         "面条": (BLUE, "暖胃一碗 · 简单满足"),
         "盖饭": (GREEN, "快捷扎实 · 干饭人选"),
@@ -166,12 +162,6 @@ def category_style(cat: str) -> tuple[tuple[int, int, int], str]:
 
 def render(pick: dict, out_path: str | Path, meal_override: str | None = None) -> Path:
     meal_cn, meal_kicker, meal_title = meal_period()
-    if meal_override == "早餐":
-        meal_cn, meal_kicker, meal_title = "早餐", "TODAY'S BREAKFAST", "早餐吃这个"
-    elif meal_override == "午餐":
-        meal_cn, meal_kicker, meal_title = "午餐", "TODAY'S LUNCH", "中午吃这个"
-    elif meal_override == "晚餐":
-        meal_cn, meal_kicker, meal_title = "晚餐", "TODAY'S DINNER", "今晚吃这个"
     cat = pick.get("_query") or pick.get("category_label") or "美食"
     if cat.startswith("MKPOI"):
         cat = pick.get("_query") or "美食"
@@ -267,7 +257,7 @@ def render(pick: dict, out_path: str | Path, meal_override: str | None = None) -
     d.rounded_rectangle([32, 545, W - 32, 640], radius=18, fill=INK)
     # gold left rail
     d.rounded_rectangle([44, 562, 50, 622], radius=3, fill=YELLOW)
-    d.text((64, 568), "WHY TONIGHT", font=f_brand, fill=YELLOW)
+    d.text((64, 568), "WHY THIS", font=f_brand, fill=YELLOW)
     vlines = wrap_text(d, vibe, f_body, W - 130)
     yy = 598
     for ln in vlines[:2]:
@@ -285,8 +275,8 @@ def render(pick: dict, out_path: str | Path, meal_override: str | None = None) -
 
     # footer
     d.rectangle([0, H - 42, W, H], fill=INK)
-    d.text((40, H - 21), phone or "外卖随机 · TodooCard", font=f_tiny, fill=PAPER, anchor="lm")
-    d.text((W - 40, H - 21), "BON APPÉTIT", font=f_tiny, fill=YELLOW, anchor="ra")
+    d.text((40, H - 21), phone or "今天吃点啥 · TodooCard", font=f_tiny, fill=PAPER, anchor="lm")
+    d.text((W - 40, H - 21), "ENJOY", font=f_tiny, fill=YELLOW, anchor="ra")
 
     # 整体上移，减少顶部留白与内容下沉感；底部用纸色补齐
     lifted = Image.new("RGB", (W, H), PAPER)
@@ -305,30 +295,28 @@ def render(pick: dict, out_path: str | Path, meal_override: str | None = None) -
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pick-json", default="/tmp/food_pick.json")
-    ap.add_argument("--out", default="/var/minis/attachments/dinner_card.png")
-    ap.add_argument("--meal", choices=["早餐", "午餐", "晚餐"], default=None)
+    ap.add_argument("--out", default="/var/minis/attachments/eat_card.png")
+    ap.add_argument("--send", action="store_true")
     args = ap.parse_args()
 
     pick_path = Path(args.pick_json)
     if not pick_path.exists():
-        pick_path = Path("/var/minis/workspace/todoocard_ios/dinner_pick.json")
+        raise SystemExit(f"pick json not found: {pick_path}")
     pick = json.loads(pick_path.read_text())
-    # merge label if needed
     if "_query" not in pick and "category" in pick and not str(pick["category"]).startswith("MKPOI"):
         pick["_query"] = pick["category"]
 
     out = render(pick, args.out)
     print(f"rendered {out}")
 
-    # save as template artifact
     tdir = Path("/var/minis/shared/todoocard/templates")
     tdir.mkdir(parents=True, exist_ok=True)
-    Image.open(out).save(tdir / "dinner.png")
-    (tdir / "dinner.json").write_text(
+    Image.open(out).save(tdir / "eat.png")
+    (tdir / "eat.json").write_text(
         json.dumps(
             {
-                "name": "dinner",
-                "title": "高级晚餐随机推荐",
+                "name": "eat",
+                "title": "今天吃点啥",
                 "size": "528x792",
                 "script": str(Path(__file__).resolve()),
                 "last_render": datetime.now().isoformat(timespec="seconds"),
@@ -341,39 +329,18 @@ def main():
     )
 
     if args.send:
-        import sys
+        # Prefer CLI entry for sending; keep a thin optional path here.
         import subprocess
 
         here = Path(__file__).resolve().parent
-        sys.path.insert(0, str(here))
-        from image_to_payload import convert
-
-        cfg = {}
-        cp = Path("/var/minis/shared/todoocard/config.json")
-        if cp.exists():
-            cfg = json.loads(cp.read_text())
-        orient = cfg.get("screen_orientation") or "rotate-180-then-flip-horizontal"
-        device = cfg.get("device_id") or ""
-        if not device:
-            raise SystemExit("missing device_id in /var/minis/shared/todoocard/config.json")
-        out_dir = Path("/var/minis/workspace/todoocard_run")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        info = convert(out, str(out_dir / "dinner_push"), orientation=orient, make_preview=True)
-        Path("/var/minis/attachments/dinner_card_preview.png").write_bytes(Path(info["preview"]).read_bytes())
-        print("payload", info)
-        native = Path(cfg.get("native_binary") or (here / "native_sender"))
-        if (cfg.get("transport") or "auto") in {"auto", "native"} and native.exists() and native.is_file() and native.stat().st_mode & 0o111:
-            cmd = [str(native), "--payload", info["qlz"], "--compressed", "--id", device]
-        elif cfg.get("transport") == "native":
-            raise SystemExit(f"native sender not built: {native}")
-        else:
-            cmd = [
-                "python3", str(here / "safe_send.py"), "--device-id", device,
-                "--payload", info["qlz"], "--block-size", str(int(cfg.get("block_size") or 240)),
-                "--pace", str(float(cfg.get("pace") or 0.0)),
-                "--wait-refresh", str(float(cfg.get("wait_refresh") or 40.0)),
+        subprocess.check_call(
+            [
+                "python3",
+                str(here / "todoocard_cli.py"),
+                "eat",
+                "--prepare-only",
             ]
-        subprocess.check_call(cmd)
+        )
 
 
 if __name__ == "__main__":
