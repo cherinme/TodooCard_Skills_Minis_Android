@@ -1,0 +1,33 @@
+# Local device / secrets (never commit)
+config.json
+**/config.json
+**/*token*
+**/*secret*
+**/*cookie*
+**/*.env
+**/.env*
+**/cookies/**
+**/credentials*
+
+# Build / runtime artifacts
+scripts/native_sender
+scripts/native_sender.dSYM/
+**/__pycache__/
+**/*.py[cod]
+**/*.qlz
+**/*.protocol.qlz
+**/*.bin
+**/*.log
+**/*_report.json
+**/*.preview.png
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local working dirs if nested
+workspace/
+offloads/
+shared/
+memory/
+attachments/
