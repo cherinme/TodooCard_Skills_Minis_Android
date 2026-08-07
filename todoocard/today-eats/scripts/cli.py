@@ -12,26 +12,22 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-SKILL_ROOT = Path(__file__).resolve().parent.parent
+# today-eats is a sub-skill of todoocard.
+# Layout: todoocard/today-eats/scripts/cli.py  →  parent scripts at todoocard/scripts/
+SUBSKILL_ROOT = Path(__file__).resolve().parent.parent
+PARENT_ROOT = SUBSKILL_ROOT.parent
 SCRIPTS = Path(__file__).resolve().parent
-# monorepo: ../../shared ; standalone Minis install may vendor shared next to skill
-_REPO_ROOT = SKILL_ROOT.parent
-_SHARED_CANDIDATES = [
-    _REPO_ROOT / "shared",
-    SKILL_ROOT / "shared",
-    Path("/var/minis/skills/todoocard-shared"),
-    Path("/var/minis/shared/todoocard"),
-]
-SHARED_CODE = next((p for p in _SHARED_CANDIDATES if (p / "scripts").is_dir() or (p / "image_to_payload.py").exists()), _SHARED_CANDIDATES[0])
-SHARED_SCRIPTS = SHARED_CODE / "scripts" if (SHARED_CODE / "scripts").is_dir() else SHARED_CODE
+PARENT_SCRIPTS = PARENT_ROOT / "scripts"
 CFG_DIR = Path("/var/minis/shared/todoocard")
 CFG_PATH = CFG_DIR / "config.json"
 ATTACH = Path("/var/minis/attachments")
 WORK = Path("/var/minis/workspace/todoocard_run")
 
 sys.path.insert(0, str(SCRIPTS))
-sys.path.insert(0, str(SHARED_SCRIPTS))
+sys.path.insert(0, str(PARENT_SCRIPTS))
 from image_to_payload import convert  # noqa: E402
+PARENT_SCRIPTS = PARENT_ROOT / "scripts"
+
 
 
 def load_cfg() -> dict:
@@ -46,7 +42,7 @@ def load_cfg() -> dict:
         "pace": 0.0,
         "wait_refresh": 8.0,
         "transport": "auto",
-        "native_binary": str(SHARED_SCRIPTS / "native_sender"),
+        "native_binary": str(PARENT_SCRIPTS / "native_sender"),
         "target": "t3",
         "size": "528x792",
         "send_policy": "full-frame-only-no-resume",
@@ -200,7 +196,7 @@ def push_payload(payload: Path, cfg: dict) -> None:
     wait_refresh = str(float(cfg.get("wait_refresh") or 8.0))
     cmd = [
         sys.executable,
-        str(SHARED_SCRIPTS / "safe_send.py"),
+        str(PARENT_SCRIPTS / "safe_send.py"),
         "--device-id",
         dev,
         "--payload",

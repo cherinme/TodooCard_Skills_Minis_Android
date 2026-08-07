@@ -1,26 +1,17 @@
-# Local device / secrets (never commit)
 **/config.json
-!shared/config.example.json
+!**/config.example.json
 **/*token*
 **/*secret*
 **/*cookie*
 **/*.env
 **/.env*
 **/cookies/**
-**/credentials*
-
-# Build / runtime artifacts
-**/native_sender
-**/native_sender.dSYM/
 **/__pycache__/
 **/*.py[cod]
 **/*.qlz
 **/*.protocol.qlz
 **/*.bin
 **/*.log
-**/*_report.json
-**/*.preview.png
+**/native_sender
+**/native_sender.dSYM/
 .DS_Store
-.idea/
-.vscode/
-*.swp
