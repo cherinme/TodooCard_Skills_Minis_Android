@@ -1,6 +1,6 @@
 # Local device / secrets (never commit)
-config.json
 **/config.json
+!shared/config.example.json
 **/*token*
 **/*secret*
 **/*cookie*
@@ -10,8 +10,8 @@ config.json
 **/credentials*
 
 # Build / runtime artifacts
-scripts/native_sender
-scripts/native_sender.dSYM/
+**/native_sender
+**/native_sender.dSYM/
 **/__pycache__/
 **/*.py[cod]
 **/*.qlz
@@ -24,10 +24,3 @@ scripts/native_sender.dSYM/
 .idea/
 .vscode/
 *.swp
-
-# Local working dirs if nested
-workspace/
-offloads/
-shared/
-memory/
-attachments/
