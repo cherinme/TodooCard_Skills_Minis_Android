@@ -284,6 +284,66 @@ git push -u origin feat/my-change
 
 ---
 
+## 开源声明
+
+### 许可证
+
+本仓库以 **[MIT License](LICENSE)** 发布。
+
+```text
+Copyright (c) 2026 TodooCard Skill Contributors
+```
+
+在遵守 MIT 条款的前提下，你可以自由地：
+
+- 使用、复制、修改、合并本软件
+- 公开发布、再分发
+- 用于商业或非商业项目
+- 进行再许可（sublicense）与销售副本
+
+**条件：** 再分发时须保留版权声明与 MIT 许可全文（见根目录 [`LICENSE`](LICENSE)）。
+
+**免责：** 软件按「现状」提供，不附带任何明示或暗示担保；作者不对使用本软件造成的损失承担责任（含推送错误导致的设备显示异常等）。
+
+### 本仓库开源范围
+
+| 包含 | 不包含 |
+|------|--------|
+| 父/子技能说明（`SKILL.md`） | 真实设备 `config.json` / UUID |
+| 转换与 BLE 发送脚本源码 | API Key、Cookie、Token |
+| 协议说明文档 | 运行日志、`.bin` / `.protocol.qlz` 产物 |
+| 安装示意图、示例配置 | 预编译 `native_sender` 二进制（仅提供 `.swift` 源码） |
+
+### 第三方与致谢
+
+本项目在实现过程中参考或依赖以下内容（权利归各方所有；本仓库代码除非另有说明，仍以 MIT 授权）：
+
+| 项目 / 组件 | 说明 |
+|-------------|------|
+| [Minis](https://github.com/OpenMinis) / [MinisSkills](https://github.com/OpenMinis/MinisSkills) | 技能运行环境与社区技能规范（官方库为 Apache-2.0） |
+| [Sunbelife/TodooCard_Skills](https://github.com/Sunbelife/TodooCard_Skills) | TodooCard 六色转换与 BLE 传输思路参考（macOS skill） |
+| Apple CoreBluetooth / 相关系统框架 | 仅通过 Minis 的 `apple-*` 接口或可选 Swift 源码调用；非本仓库再授权对象 |
+| Pillow 等开源库 | 由用户环境自行安装，遵循其各自许可证 |
+
+协议逆向/兼容实现基于公开 skill 与设备侧可观察行为，用于个人设备互联；**不包含**任何厂商未公开固件镜像或密钥。
+
+### 商标与品牌
+
+「TodooCard」「土豆片」「NEWSTONE」「Minis」等名称与标识归其各自权利人所有。  
+本项目为**非官方**社区技能，与上述品牌权利人**无隶属或背书关系**，不声称代表官方产品。
+
+### 使用与安全提示
+
+- 仅建议在**你拥有或已获授权**的电子纸设备上推送画面。
+- 错误的半帧/续传推送可能导致花屏；默认实现要求整帧发送。
+- 贡献代码即表示你确认有权以 MIT 贡献该内容，且未夹带密钥或他人专有代码。
+
+### 贡献
+
+欢迎 Issue / PR。向本仓库贡献请遵循上文「本仓库提交规范」；向上游 MinisSkills 贡献请额外遵循官方 checklist。
+
+---
+
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 TodooCard Skill Contributors
