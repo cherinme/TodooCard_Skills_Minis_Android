@@ -1,3 +1,7 @@
+感谢原项目 https://github.com/Sunbelife/TodooCard_Skills 、
+小玩具挺好玩。
+本项目纯基于Codex，这货道德感挺强应该没有雷，欢迎大家审查
+
 # TodooCard Skills for Android Minis
 
 在 Android 版 [Minis](https://github.com/OpenMinis) 中扫描、绑定并整帧推送内容到
