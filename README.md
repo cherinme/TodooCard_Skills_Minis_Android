@@ -23,10 +23,11 @@ CoreBluetooth 发送器。本版本已完整移除这些依赖：
 
 ### 1. 发布到自己的 GitHub 仓库
 
-Android Minis 从 URL 导入技能。把本目录推到你自己的公开仓库后，导入父技能目录：
+Android Minis 从 URL 导入技能。把本目录推到你自己的公开仓库后，导入父技能的
+`SKILL.md` 文件：
 
 ```text
-https://github.com/<你的账号>/<仓库名>/tree/main/todoocard
+https://github.com/<你的账号>/<仓库名>/blob/main/todoocard/SKILL.md
 ```
 
 在 Minis 中打开：**设置 → 技能 → 导入技能 → URL**。
