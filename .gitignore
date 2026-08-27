@@ -14,4 +14,7 @@
 **/*.log
 **/native_sender
 **/native_sender.dSYM/
+**/.gradle/
+**/build/
+**/local.properties
 .DS_Store

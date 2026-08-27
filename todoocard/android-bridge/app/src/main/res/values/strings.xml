@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TodooCard BLE Bridge</string>
+    <string name="trust_minis">Trust this Minis and continue</string>
+</resources>

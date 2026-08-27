@@ -296,7 +296,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pick-json", default="/tmp/food_pick.json")
     ap.add_argument("--out", default="/var/minis/attachments/eat_card.png")
-    ap.add_argument("--send", action="store_true")
     args = ap.parse_args()
 
     pick_path = Path(args.pick_json)
@@ -327,21 +326,6 @@ def main():
         ),
         encoding="utf-8",
     )
-
-    if args.send:
-        # Prefer CLI entry for sending; keep a thin optional path here.
-        import subprocess
-
-        here = Path(__file__).resolve().parent
-        subprocess.check_call(
-            [
-                "python3",
-                str(here / "todoocard_cli.py"),
-                "eat",
-                "--prepare-only",
-            ]
-        )
-
 
 if __name__ == "__main__":
     main()

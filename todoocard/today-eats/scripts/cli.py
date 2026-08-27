@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""TodooCard skill CLI — 今天吃点啥（附近随机外卖 → 电子纸）。"""
+"""TodooCard Android Minis CLI: device setup and today's nearby meal card."""
+
 from __future__ import annotations
 
 import argparse
 import json
 import random
+import secrets
 import shutil
-import subprocess
 import sys
-import time
-from datetime import datetime
 from pathlib import Path
 
-# today-eats is a sub-skill of todoocard.
-# Layout: todoocard/today-eats/scripts/cli.py  →  parent scripts at todoocard/scripts/
 SUBSKILL_ROOT = Path(__file__).resolve().parent.parent
 PARENT_ROOT = SUBSKILL_ROOT.parent
 SCRIPTS = Path(__file__).resolve().parent
@@ -25,376 +22,223 @@ WORK = Path("/var/minis/workspace/todoocard_run")
 
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(PARENT_SCRIPTS))
-from image_to_payload import convert  # noqa: E402
-PARENT_SCRIPTS = PARENT_ROOT / "scripts"
 
+from android_bridge import BridgeError, call_bridge  # noqa: E402
+from image_to_payload import convert  # noqa: E402
+from meal_template import render  # noqa: E402
+from places import search_nearby_food  # noqa: E402
+
+DEFAULT_CONFIG = {
+    "device_id": "",
+    "device_name": "",
+    "companion_key": "",
+    "screen_orientation": "rotate-180-then-flip-horizontal",
+    "target": "t3",
+    "size": "528x792",
+    "places_provider": "openstreetmap-overpass",
+    "send_policy": "full-frame-only-no-resume",
+}
 
 
 def load_cfg() -> dict:
     CFG_DIR.mkdir(parents=True, exist_ok=True)
     if CFG_PATH.exists():
-        return json.loads(CFG_PATH.read_text())
-    cfg = {
-        "device_id": "",
-        "device_name": "",
-        "screen_orientation": "rotate-180-then-flip-horizontal",
-        "block_size": 240,
-        "pace": 0.0,
-        "wait_refresh": 8.0,
-        "transport": "auto",
-        "native_binary": str(PARENT_SCRIPTS / "native_sender"),
-        "target": "t3",
-        "size": "528x792",
-        "send_policy": "full-frame-only-no-resume",
-    }
-    CFG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+        loaded = json.loads(CFG_PATH.read_text(encoding="utf-8"))
+        cfg = {**DEFAULT_CONFIG, **loaded}
+    else:
+        cfg = dict(DEFAULT_CONFIG)
+    if not cfg.get("companion_key"):
+        cfg["companion_key"] = secrets.token_hex(32)
+        save_cfg(cfg)
     return cfg
 
 
 def save_cfg(cfg: dict) -> None:
     CFG_DIR.mkdir(parents=True, exist_ok=True)
-    CFG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+    CFG_PATH.write_text(
+        json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
 
 
-def run(cmd: list[str], timeout: int = 120) -> dict:
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    out = (p.stdout or "").strip()
-    if not out:
-        raise RuntimeError(f"empty: {' '.join(cmd)}\n{p.stderr}")
-    start = out.find("{")
-    if start < 0:
-        raise RuntimeError(out[:500])
-    return json.loads(out[start:])
+def print_result(result: dict) -> None:
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
-def bt(args: list[str], timeout: int = 60) -> dict:
-    d = run(["apple-bluetooth", *args, "--compact"], timeout=timeout)
-    if d.get("ok") is False:
-        raise RuntimeError(str(d.get("error")))
-    return d
-
-
-def cmd_scan(args):
-    print("scanning BLE…")
-    d = bt(["scan", "--duration", str(args.duration)], timeout=args.duration + 30)
-    devs = (d.get("data") or {}).get("devices") or []
-    hits = []
-    for x in devs:
-        name = (x.get("name") or "")
-        svcs = x.get("advertised_services") or []
-        blob = (" ".join(map(str, svcs)) + " " + name).lower()
-        if any(k in blob for k in ["fef0", "fdf0", "newstone", "todoo", "potato", "nemr", "picksmart"]):
-            hits.append(x)
-            print(
-                f"HIT rssi={x.get('rssi')} name={name!r} uuid={x.get('uuid')} services={svcs}"
-            )
-    if not hits:
-        print("no FEF0/NEWSTONE hits; named devices:")
-        for x in sorted([z for z in devs if z.get("name")], key=lambda z: -(z.get("rssi") or -999))[:20]:
-            print(f"  {x.get('rssi')} {x.get('name')!r} {x.get('uuid')}")
-    return hits
-
-
-def cmd_probe(args):
+def cmd_scan(_args) -> None:
     cfg = load_cfg()
-    dev = args.device_id or cfg.get("device_id")
-    if not dev:
-        raise SystemExit("need --device-id or config device_id")
-    print("connect", dev)
-    bt(["connect", "--uuid", dev], timeout=45)
-    svc = bt(["services", "--uuid", dev])
-    print(json.dumps(svc.get("data"), ensure_ascii=False, indent=2))
-    try:
-        info = bt(["read", "--uuid", dev, "--service", "FEF0", "--characteristic", "FEF3"])
-        print("FEF3", info.get("data"))
-    except Exception as e:
-        print("FEF3", e)
-    import threading
+    print_result(call_bridge("scan", companion_key=cfg["companion_key"]))
 
-    box = {}
 
-    def nworker():
-        try:
-            box["r"] = bt(
-                [
-                    "notify",
-                    "--uuid",
-                    dev,
-                    "--service",
-                    "FEF0",
-                    "--characteristic",
-                    "FEF1",
-                    "--duration",
-                    "8",
-                ],
-                timeout=40,
-            )
-        except Exception as e:
-            box["e"] = str(e)
+def cmd_pair(args) -> None:
+    cfg = load_cfg()
+    print_result(
+        call_bridge(
+            "pair", companion_key=cfg["companion_key"], device_id=args.device_id
+        )
+    )
 
-    t = threading.Thread(target=nworker)
-    t.start()
-    time.sleep(2)
-    try:
-        bt(["write", "--uuid", dev, "--service", "FEF0", "--characteristic", "FEF1", "--value", "01"])
-    except Exception as e:
-        print("write01", e)
-    t.join(timeout=15)
-    samples = ((box.get("r") or {}).get("data") or {}).get("samples") or []
-    block = None
-    for s in samples:
-        hx = (s.get("value_hex") or "").replace(" ", "")
-        if len(hx) >= 6 and hx.startswith("01") and hx.endswith("00"):
-            block = int(hx[2:4], 16) - 4
-            print("block_size", block, "raw", hx)
-    name = (svc.get("data") or {}).get("name") or cfg.get("device_name")
+
+def cmd_probe(args) -> None:
+    cfg = load_cfg()
+    device_id = args.device_id or cfg.get("device_id")
+    if not device_id:
+        raise SystemExit("probe requires --device-id or a saved device_id")
+    result = call_bridge(
+        "probe", companion_key=cfg["companion_key"], device_id=device_id
+    )
     if args.save:
-        cfg["device_id"] = dev
-        if name:
-            cfg["device_name"] = name
-        if block:
-            cfg["block_size"] = block
+        cfg["device_id"] = device_id.upper()
+        if result.get("device_name"):
+            cfg["device_name"] = result["device_name"]
         save_cfg(cfg)
-        print("saved", CFG_PATH)
-    try:
-        bt(["disconnect", "--uuid", dev])
-    except Exception:
-        pass
+        print(f"saved {CFG_PATH}")
+    print_result(result)
 
 
-def prepare_image(src: Path, prefix: Path, orientation: str) -> dict:
+def cmd_location(_args) -> None:
+    cfg = load_cfg()
+    print_result(call_bridge("location", companion_key=cfg["companion_key"]))
+
+
+def prepare_image(source: Path, prefix: Path, orientation: str) -> dict:
     WORK.mkdir(parents=True, exist_ok=True)
     ATTACH.mkdir(parents=True, exist_ok=True)
-    info = convert(str(src), str(prefix), orientation=orientation, make_preview=True)
-    prev = Path(info["preview"])
-    if prev.exists():
-        dest = ATTACH / f"{prefix.name}_preview.png"
-        shutil.copy(prev, dest)
-        info["preview_attach"] = str(dest)
+    info = convert(
+        str(source), str(prefix), orientation=orientation, make_preview=True
+    )
+    preview = Path(info["preview"])
+    if preview.exists():
+        destination = ATTACH / f"{prefix.name}_preview.png"
+        shutil.copy(preview, destination)
+        info["preview_attach"] = str(destination)
     return info
 
 
 def push_payload(payload: Path, cfg: dict) -> None:
-    dev = cfg.get("device_id")
-    if not dev:
-        raise SystemExit("config missing device_id — run: todoocard_cli.py scan && probe --save")
-
-    selected = cfg.get("transport") or "auto"
-    native_bin = Path(cfg.get("native_binary") or (SCRIPTS / "native_sender"))
-    if selected in {"auto", "native"} and native_bin.exists() and native_bin.is_file() and native_bin.stat().st_mode & 0o111:
-        cmd = [str(native_bin), "--payload", str(payload), "--compressed", "--id", dev]
-        print("exec native CoreBluetooth:", " ".join(cmd), flush=True)
-        subprocess.check_call(cmd)
-        return
-    if selected == "native":
-        raise SystemExit(
-            f"native sender not built: {native_bin}. Run build_native_sender.sh on macOS with Xcode/swiftc."
+    device_id = cfg.get("device_id")
+    if not device_id:
+        raise SystemExit("config missing device_id; run scan, pair, then probe --save")
+    print_result(
+        call_bridge(
+            "send",
+            companion_key=cfg["companion_key"],
+            device_id=device_id,
+            payload_path=payload,
         )
+    )
 
-    bs = str(cfg.get("block_size") or 240)
-    pc = str(cfg.get("pace") if cfg.get("pace") is not None else 0.0)
-    wait_refresh = str(float(cfg.get("wait_refresh") or 8.0))
-    cmd = [
-        sys.executable,
-        str(PARENT_SCRIPTS / "safe_send.py"),
-        "--device-id",
-        dev,
-        "--payload",
-        str(payload),
-        "--block-size",
-        bs,
-        "--pace",
-        pc,
-        "--wait-refresh",
-        wait_refresh,
+
+def pick_place(places: list[dict], maximum_m: float) -> dict:
+    candidates = [
+        place
+        for place in places
+        if 0 < float(place.get("distance_m") or 0) <= maximum_m
     ]
-    print("exec CLI:", " ".join(cmd), flush=True)
-    subprocess.check_call(cmd)
+    if not candidates:
+        raise SystemExit("no nearby restaurants found within the requested distance")
+    return random.choice(candidates[:60])
 
 
-def search_nearby_food(lat: float, lon: float, radius: int = 2500) -> list[dict]:
-    queries = [
-        "中餐厅",
-        "火锅",
-        "烧烤",
-        "麻辣烫",
-        "面条",
-        "盖饭",
-        "快餐",
-        "日料",
-        "韩式料理",
-        "炸鸡",
-        "汉堡",
-        "披萨",
-        "小吃",
-        "米粉",
-        "黄焖鸡",
-        "冒菜",
-        "饺子",
-        "寿司",
-    ]
-    all_places: dict[str, dict] = {}
-    for q in queries:
-        try:
-            d = run(
-                [
-                    "apple-maps",
-                    "search",
-                    "--query",
-                    q,
-                    "--lat",
-                    str(lat),
-                    "--lon",
-                    str(lon),
-                    "--radius",
-                    str(radius),
-                    "--limit",
-                    "12",
-                    "--compact",
-                ],
-                timeout=30,
-            )
-        except Exception as e:
-            print("search fail", q, e)
-            continue
-        if not d.get("ok"):
-            continue
-        items = (d.get("data") or {}).get("places") or (d.get("data") or {}).get("results") or []
-        if isinstance(d.get("data"), list):
-            items = d["data"]
-        if not isinstance(items, list):
-            continue
-        for it in items:
-            name = it.get("name") or ""
-            la = it.get("lat")
-            lo = it.get("lon")
-            key = f"{name}|{round(float(la or 0),5)}|{round(float(lo or 0),5)}"
-            it = dict(it)
-            it["_query"] = q
-            all_places[key] = it
-        print(f"{q} → {len(items)}")
-    return list(all_places.values())
-
-
-def pick_place(places: list[dict], max_m: float = 2800) -> dict:
-    exclude = ["咖啡", "茶饮", "奶茶", "酒吧", "KTV", "酒店", "超市", "便利店", "加油站", "不对外开放"]
-    cands = []
-    for it in places:
-        name = it.get("name") or ""
-        if any(k in name for k in exclude):
-            continue
-        dist = it.get("distance_m")
-        if dist is None or dist > max_m:
-            continue
-        cands.append(it)
-    seen = set()
-    uniq = []
-    for it in sorted(cands, key=lambda x: x.get("distance_m") or 1e9):
-        if it["name"] in seen:
-            continue
-        seen.add(it["name"])
-        uniq.append(it)
-    if not uniq:
-        raise SystemExit("no nearby restaurants found")
-    return random.choice(uniq[:60])
-
-
-def cmd_eat(args):
-    """今天吃点啥：附近随机外卖 → 卡片 → 推送到土豆片。"""
+def cmd_eat(args) -> None:
     cfg = load_cfg()
-    print("location…")
-    loc = run(["apple-location", "current", "--accuracy", "km", "--compact"])
-    data = loc.get("data") or loc
-    lat, lon = data["latitude"], data["longitude"]
-    addr = data.get("address") or {}
-    print("at", addr, lat, lon)
-
-    places = search_nearby_food(lat, lon, radius=args.radius)
+    location = call_bridge("location", companion_key=cfg["companion_key"])
+    latitude = float(location["latitude"])
+    longitude = float(location["longitude"])
+    print(
+        f"location accuracy={location.get('accuracy_m')}m "
+        f"provider={location.get('provider')}"
+    )
+    places = search_nearby_food(latitude, longitude, radius=args.radius)
     WORK.mkdir(parents=True, exist_ok=True)
-    (WORK / "food_places.json").write_text(json.dumps(places, ensure_ascii=False, indent=2))
-    pick = pick_place(places, max_m=args.max_distance)
-    pick_path = WORK / "food_pick.json"
-    pick_path.write_text(json.dumps(pick, ensure_ascii=False, indent=2))
-    print("PICK", pick.get("name"), pick.get("distance_m"), "m", pick.get("_query"))
+    (WORK / "food_places.json").write_text(
+        json.dumps(places, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    selected = pick_place(places, args.max_distance)
+    (WORK / "food_pick.json").write_text(
+        json.dumps(selected, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(
+        f"PICK {selected.get('name')} {selected.get('distance_m')}m "
+        f"{selected.get('_query')}"
+    )
 
-    from meal_template import render
-
-    card = ATTACH / "eat_card.png"
-    render(pick, card)
-    print("card", card)
-
-    if args.prepare_only or args.no_send:
-        orient = cfg.get("screen_orientation") or "rotate-180-then-flip-horizontal"
-        info = prepare_image(card, WORK / "eat_push", orient)
-        print("preview", info.get("preview_attach"))
-        return
-
-    orient = cfg.get("screen_orientation") or "rotate-180-then-flip-horizontal"
-    info = prepare_image(card, WORK / "eat_push", orient)
-    shutil.copy(info["preview"], ATTACH / "eat_card_preview.png")
-    push_payload(Path(info["qlz"]), cfg)
+    ATTACH.mkdir(parents=True, exist_ok=True)
+    card = render(selected, ATTACH / "eat_card.png")
+    orientation = cfg.get("screen_orientation") or DEFAULT_CONFIG["screen_orientation"]
+    info = prepare_image(card, WORK / "eat_push", orientation)
+    print(f"preview {info.get('preview_attach')}")
+    if not args.prepare_only:
+        push_payload(Path(info["qlz"]), cfg)
 
 
-def cmd_config(args):
+def cmd_config(args) -> None:
     cfg = load_cfg()
-    if args.show or not any([args.device_id, args.orientation, args.block_size, args.pace is not None]):
-        print(json.dumps(cfg, ensure_ascii=False, indent=2))
-        print("path", CFG_PATH)
+    def visible_config() -> dict:
+        visible = dict(cfg)
+        visible["companion_key"] = "***configured***"
+        return visible
+
+    if args.show or not any([args.device_id, args.device_name, args.orientation]):
+        print_result(visible_config())
+        print(f"path {CFG_PATH}")
         return
     if args.device_id:
-        cfg["device_id"] = args.device_id
-    if args.orientation:
-        cfg["screen_orientation"] = args.orientation
-    if args.block_size:
-        cfg["block_size"] = args.block_size
-    if args.pace is not None:
-        cfg["pace"] = args.pace
+        cfg["device_id"] = args.device_id.upper()
     if args.device_name:
         cfg["device_name"] = args.device_name
+    if args.orientation:
+        cfg["screen_orientation"] = args.orientation
     save_cfg(cfg)
-    print("updated", json.dumps(cfg, ensure_ascii=False, indent=2))
+    print_result(visible_config())
 
 
-def main():
-    ap = argparse.ArgumentParser(prog="today-eats", description="today-eats · 今天吃点啥")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="today-eats", description="TodooCard for Android Minis"
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("scan", help="scan nearby TodooCard-like BLE devices")
-    p.add_argument("--duration", type=int, default=12)
-    p.set_defaults(func=cmd_scan)
+    scan = subparsers.add_parser("scan", help="scan compatible TodooCard devices")
+    scan.set_defaults(func=cmd_scan)
+    pair = subparsers.add_parser("pair", help="create the Android system bond")
+    pair.add_argument("--device-id", required=True)
+    pair.set_defaults(func=cmd_pair)
+    probe = subparsers.add_parser(
+        "probe", help="verify advertisement, bond, and image GATT"
+    )
+    probe.add_argument("--device-id")
+    probe.add_argument("--save", action="store_true")
+    probe.set_defaults(func=cmd_probe)
+    location = subparsers.add_parser("location", help="test Android location access")
+    location.set_defaults(func=cmd_location)
 
-    p = sub.add_parser("probe", help="probe device services / block size")
-    p.add_argument("--device-id")
-    p.add_argument("--save", action="store_true")
-    p.set_defaults(func=cmd_probe)
+    config = subparsers.add_parser("config", help="show or update local config")
+    config.add_argument("--show", action="store_true")
+    config.add_argument("--device-id")
+    config.add_argument("--device-name")
+    config.add_argument(
+        "--orientation",
+        choices=["normal", "rotate-180-then-flip-horizontal"],
+    )
+    config.set_defaults(func=cmd_config)
 
-    p = sub.add_parser("config", help="show/update shared config")
-    p.add_argument("--show", action="store_true")
-    p.add_argument("--device-id")
-    p.add_argument("--device-name")
-    p.add_argument("--orientation", choices=["normal", "rotate-180-then-flip-horizontal"])
-    p.add_argument("--block-size", type=int)
-    p.add_argument("--pace", type=float)
-    p.set_defaults(func=cmd_config)
+    def add_eat_parser(name: str) -> None:
+        eat = subparsers.add_parser(name, help="nearby random restaurant to TodooCard")
+        eat.add_argument("--radius", type=int, default=2500)
+        eat.add_argument("--max-distance", type=float, default=2800)
+        eat.add_argument("--prepare-only", action="store_true")
+        eat.set_defaults(func=cmd_eat)
 
-    p = sub.add_parser("eat", help="今天吃点啥：附近随机外卖 → 卡片 → 推送")
-    p.add_argument("--radius", type=int, default=2500)
-    p.add_argument("--max-distance", type=float, default=2800)
-    p.add_argument("--no-send", action="store_true")
-    p.add_argument("--prepare-only", action="store_true")
-    p.set_defaults(func=cmd_eat)
-
-    # aliases
-    p = sub.add_parser("今天吃点啥", help="alias of eat")
-    p.add_argument("--radius", type=int, default=2500)
-    p.add_argument("--max-distance", type=float, default=2800)
-    p.add_argument("--no-send", action="store_true")
-    p.add_argument("--prepare-only", action="store_true")
-    p.set_defaults(func=cmd_eat)
-
-    args = ap.parse_args()
-    args.func(args)
+    add_eat_parser("eat")
+    add_eat_parser("今天吃点啥")
+    args = parser.parse_args()
+    try:
+        args.func(args)
+    except BridgeError as error:
+        print(f"Android bridge error: {error}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
