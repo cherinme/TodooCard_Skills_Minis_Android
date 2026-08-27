@@ -29,6 +29,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.util.SparseArray;
 import android.view.Gravity;
@@ -64,6 +65,10 @@ public final class MainActivity extends Activity {
     private static final int SCREEN_TYPE = 0x134C;
     private static final int WIDTH = 528;
     private static final int HEIGHT = 792;
+    private static final int DESIRED_MTU = 247;
+    private static final long NO_RESPONSE_PACE_MS = 4;
+    private static final long QUEUE_RETRY_MS = 4;
+    private static final long QUEUE_BUSY_TIMEOUT_MS = 10_000;
     private static final UUID SERVICE_FEF0 = uuid16("FEF0");
     private static final UUID SERVICE_FDF0 = uuid16("FDF0");
     private static final UUID CONTROL_FEF1 = uuid16("FEF1");
@@ -100,13 +105,20 @@ public final class MainActivity extends Activity {
     private boolean dataWriteWithResponse;
     private boolean pairingHintShown;
     private boolean backgroundExecutionStarted;
+    private boolean serviceDiscoveryStarted;
+    private boolean directBondedConnection;
     private int blockPayloadSize;
     private int nextBlock;
     private int lastProgress = -1;
-    private int rejectedWrites;
+    private int negotiatedMtu = 23;
+    private long queueBusySince;
+    private long transferStartedAt;
+    private long payloadWrittenAt;
     private Runnable operationTimeout;
     private Runnable controlTimeout;
     private Runnable finalAckTimeout;
+    private Runnable mtuFallback;
+    private final Runnable dataPump = this::pumpData;
     private final LocationListener locationListener = new LocationListener() {
         @Override
         public void onLocationChanged(Location location) {
@@ -195,10 +207,15 @@ public final class MainActivity extends Activity {
         streaming = false;
         dataWriteWithResponse = false;
         pairingHintShown = false;
+        serviceDiscoveryStarted = false;
+        directBondedConnection = false;
         blockPayloadSize = 0;
         nextBlock = 0;
         lastProgress = -1;
-        rejectedWrites = 0;
+        negotiatedMtu = 23;
+        queueBusySince = 0;
+        transferStartedAt = 0;
+        payloadWrittenAt = 0;
         backgroundExecutionStarted = false;
         output.setText("");
         content.setVisibility(View.INVISIBLE);
@@ -330,7 +347,11 @@ public final class MainActivity extends Activity {
         if (!startBackgroundExecution()) {
             return;
         }
-        startScan();
+        if ("probe".equals(mode) || "send".equals(mode)) {
+            connectBondedTarget();
+        } else {
+            startScan();
+        }
     }
 
     @Override
@@ -348,6 +369,8 @@ public final class MainActivity extends Activity {
         }
         if ("location".equals(mode)) {
             startLocation();
+        } else if ("probe".equals(mode) || "send".equals(mode)) {
+            connectBondedTarget();
         } else {
             startScan();
         }
@@ -474,6 +497,29 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void connectBondedTarget() {
+        try {
+            BluetoothDevice bondedTarget = null;
+            for (BluetoothDevice candidate : adapter.getBondedDevices()) {
+                if (candidate.getAddress().equalsIgnoreCase(targetAddress)) {
+                    bondedTarget = candidate;
+                    break;
+                }
+            }
+            if (bondedTarget == null) {
+                fail("Target is not in Android bonded devices; run pair, then probe --save");
+                return;
+            }
+            targetDevice = bondedTarget;
+            directBondedConnection = true;
+            advertisement = new Advertisement(SCREEN_TYPE, -1, true, false);
+            log("Using existing Android bond for direct connection to " + targetAddress);
+            connectTarget();
+        } catch (SecurityException error) {
+            fail("Bluetooth bonded-device permission error: " + error.getMessage());
+        }
+    }
+
     private final ScanCallback scanCallback = new ScanCallback() {
         @Override
         public void onScanResult(int callbackType, ScanResult result) {
@@ -590,7 +636,7 @@ public final class MainActivity extends Activity {
             log("Connecting to " + targetAddress);
             gatt = targetDevice.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE);
             operationTimeout = () -> fail("Timed out connecting to target");
-            handler.postDelayed(operationTimeout, 20_000);
+            handler.postDelayed(operationTimeout, directBondedConnection ? 45_000 : 20_000);
         } catch (SecurityException error) {
             fail("Bluetooth connect permission error: " + error.getMessage());
         }
@@ -602,15 +648,32 @@ public final class MainActivity extends Activity {
             handler.post(() -> {
                 if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                     handler.removeCallbacks(operationTimeout);
-                    log("Connected; discovering services");
+                    boolean highPriority = callbackGatt.requestConnectionPriority(
+                            BluetoothGatt.CONNECTION_PRIORITY_HIGH);
+                    log("Connected; high-priority connection request=" + highPriority);
                     operationTimeout = () -> fail("Timed out preparing the verified TodooCard GATT connection");
                     handler.postDelayed(operationTimeout, 35_000);
-                    if (!callbackGatt.discoverServices()) {
-                        fail("Android refused service discovery");
+                    if (callbackGatt.requestMtu(DESIRED_MTU)) {
+                        log("Requesting GATT MTU " + DESIRED_MTU);
+                        mtuFallback = () -> beginServiceDiscovery(callbackGatt, negotiatedMtu);
+                        handler.postDelayed(mtuFallback, 5_000);
+                    } else {
+                        log("MTU request was not accepted; using the current MTU");
+                        beginServiceDiscovery(callbackGatt, negotiatedMtu);
                     }
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED && !resultWritten) {
                     fail("BLE disconnected before completion; full-frame retry required (status " + status + ")");
                 }
+            });
+        }
+
+        @Override
+        public void onMtuChanged(BluetoothGatt callbackGatt, int mtu, int status) {
+            handler.post(() -> {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    negotiatedMtu = mtu;
+                }
+                beginServiceDiscovery(callbackGatt, negotiatedMtu);
             });
         }
 
@@ -686,12 +749,29 @@ public final class MainActivity extends Activity {
                     fail("BLE write failed with status " + status + "; full-frame retry required");
                     return;
                 }
-                if (dataWriteWithResponse && dataCharacteristic != null && characteristic.getUuid().equals(dataCharacteristic.getUuid()) && streaming) {
+                if (dataCharacteristic != null
+                        && characteristic.getUuid().equals(dataCharacteristic.getUuid())
+                        && streaming) {
+                    handler.removeCallbacks(dataPump);
                     pumpData();
                 }
             });
         }
     };
+
+    private void beginServiceDiscovery(BluetoothGatt callbackGatt, int mtu) {
+        if (serviceDiscoveryStarted || resultWritten) {
+            return;
+        }
+        serviceDiscoveryStarted = true;
+        if (mtuFallback != null) {
+            handler.removeCallbacks(mtuFallback);
+        }
+        log("Using GATT MTU " + mtu + "; discovering services");
+        if (!callbackGatt.discoverServices()) {
+            fail("Android refused service discovery");
+        }
+    }
 
     private void prepareImageService() {
         BluetoothGattService service = gatt.getService(SERVICE_FEF0);
@@ -720,8 +800,13 @@ public final class MainActivity extends Activity {
                 extra.put("device_id", targetAddress);
                 extra.put("device_name", targetDevice.getName() == null ? "" : targetDevice.getName());
                 extra.put("secure", advertisement.secure);
-                extra.put("firmware", String.format(Locale.ROOT, "0x%02X", advertisement.firmware));
+                extra.put("firmware", advertisement.firmware >= 0
+                        ? String.format(Locale.ROOT, "0x%02X", advertisement.firmware)
+                        : "not-advertised");
+                extra.put("connection", directBondedConnection
+                        ? "android-bond" : "verified-advertisement");
                 extra.put("block_size", 240);
+                extra.put("mtu", negotiatedMtu);
             } catch (JSONException | SecurityException ignored) {
             }
             succeed("Exact address, advertisement, encrypted bond, and FEF1/FEF2 access verified", extra);
@@ -789,6 +874,12 @@ public final class MainActivity extends Activity {
                 fail("Unsafe block payload size: " + blockPayloadSize);
                 return;
             }
+            int requiredMtu = blockPayloadSize + 7;
+            if (negotiatedMtu < requiredMtu) {
+                fail("Negotiated GATT MTU " + negotiatedMtu
+                        + " is too small for the required data packet; need " + requiredMtu);
+                return;
+            }
             byte[] announce = new byte[6];
             announce[0] = 0x02;
             putLittleEndian(announce, 1, payload.length);
@@ -805,7 +896,7 @@ public final class MainActivity extends Activity {
                 if (finalAckTimeout != null) {
                     handler.removeCallbacks(finalAckTimeout);
                 }
-                succeed("Transfer completed and refresh acknowledged", null);
+                succeed("Transfer completed and refresh acknowledged", transferMetrics());
                 return;
             }
             if (status != 0 || bytes.length < 6) {
@@ -820,8 +911,19 @@ public final class MainActivity extends Activity {
                 }
                 nextBlock = 0;
                 streaming = true;
-                dataWriteWithResponse = (dataCharacteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_WRITE) != 0;
+                int properties = dataCharacteristic.getProperties();
+                boolean supportsWriteWithoutResponse =
+                        (properties & BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE) != 0;
+                boolean supportsWriteWithResponse =
+                        (properties & BluetoothGattCharacteristic.PROPERTY_WRITE) != 0;
+                if (!supportsWriteWithoutResponse && !supportsWriteWithResponse) {
+                    fail("TodooCard data characteristic is not writable");
+                    return;
+                }
+                dataWriteWithResponse = !supportsWriteWithoutResponse;
+                transferStartedAt = SystemClock.elapsedRealtime();
                 log("Starting full-frame stream at block " + nextBlock + " using " + (dataWriteWithResponse ? "write-with-response" : "paced write-without-response"));
+                postProgress(0, -1);
                 pumpData();
             }
         }
@@ -833,10 +935,7 @@ public final class MainActivity extends Activity {
         }
         int offset = nextBlock * blockPayloadSize;
         if (offset >= payload.length) {
-            streaming = false;
-            log("Payload written; waiting for final refresh acknowledgement");
-            finalAckTimeout = () -> fail("Timed out waiting for final refresh acknowledgement");
-            handler.postDelayed(finalAckTimeout, 90_000);
+            waitForFinalAck();
             return;
         }
         int length = Math.min(blockPayloadSize, payload.length - offset);
@@ -848,23 +947,106 @@ public final class MainActivity extends Activity {
                 : BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
         dataCharacteristic.setValue(packet);
         if (!gatt.writeCharacteristic(dataCharacteristic)) {
-            rejectedWrites++;
-            if (rejectedWrites > 100) {
+            long now = SystemClock.elapsedRealtime();
+            if (queueBusySince == 0) {
+                queueBusySince = now;
+            } else if (now - queueBusySince >= QUEUE_BUSY_TIMEOUT_MS) {
                 fail("Android BLE queue remained busy; full-frame retry required");
                 return;
             }
-            handler.postDelayed(this::pumpData, 15);
+            handler.postDelayed(dataPump, QUEUE_RETRY_MS);
             return;
         }
-        rejectedWrites = 0;
+        queueBusySince = 0;
         nextBlock++;
         int percent = (int) Math.floor(100.0 * Math.min(payload.length, offset + length) / payload.length);
         if (percent != lastProgress && (percent % 5 == 0 || percent == 100)) {
             lastProgress = percent;
             log("Progress " + percent + "% block=" + (nextBlock - 1));
+            postProgress(percent, nextBlock - 1);
+        }
+        if (offset + length >= payload.length) {
+            waitForFinalAck();
+            return;
         }
         if (!dataWriteWithResponse) {
-            handler.postDelayed(this::pumpData, 8);
+            handler.postDelayed(dataPump, NO_RESPONSE_PACE_MS);
+        }
+    }
+
+    private void waitForFinalAck() {
+        if (payloadWrittenAt == 0) {
+            payloadWrittenAt = SystemClock.elapsedRealtime();
+        }
+        streaming = false;
+        log("Payload written; waiting for final refresh acknowledgement");
+        finalAckTimeout = () -> fail("Timed out waiting for final refresh acknowledgement");
+        handler.postDelayed(finalAckTimeout, 180_000);
+    }
+
+    private JSONObject transferMetrics() {
+        JSONObject metrics = new JSONObject();
+        long completedAt = SystemClock.elapsedRealtime();
+        long writeMs = payloadWrittenAt > transferStartedAt
+                ? payloadWrittenAt - transferStartedAt : 0;
+        try {
+            metrics.put("blocks", nextBlock);
+            metrics.put("mtu", negotiatedMtu);
+            metrics.put("write_mode", dataWriteWithResponse
+                    ? "with-response" : "without-response");
+            metrics.put("connection", directBondedConnection
+                    ? "android-bond" : "verified-advertisement");
+            metrics.put("payload_write_ms", writeMs);
+            metrics.put("refresh_wait_ms", payloadWrittenAt > 0
+                    ? completedAt - payloadWrittenAt : 0);
+            metrics.put("transfer_ms", transferStartedAt > 0
+                    ? completedAt - transferStartedAt : 0);
+            if (writeMs > 0) {
+                metrics.put("throughput_kib_s",
+                        payload.length * 1000.0 / writeMs / 1024.0);
+            }
+        } catch (JSONException ignored) {
+        }
+        return metrics;
+    }
+
+    private void postProgress(int percent, int block) {
+        JSONObject progress = new JSONObject();
+        try {
+            progress.put("request_id", requestId);
+            progress.put("mode", mode);
+            progress.put("percent", percent);
+            progress.put("block", block);
+            byte[] body = progress.toString().getBytes(StandardCharsets.UTF_8);
+            new Thread(() -> postProgressBody(body),
+                    "todoocard-progress-" + percent).start();
+        } catch (JSONException error) {
+            Log.w(TAG, "Cannot create progress heartbeat", error);
+        }
+    }
+
+    private void postProgressBody(byte[] body) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(callbackBaseUrl + "/progress").openConnection();
+            connection.setConnectTimeout(3_000);
+            connection.setReadTimeout(3_000);
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            connection.setFixedLengthStreamingMode(body.length);
+            connection.setDoOutput(true);
+            try (OutputStream stream = connection.getOutputStream()) {
+                stream.write(body);
+            }
+            if (connection.getResponseCode() != 200) {
+                Log.w(TAG, "Progress heartbeat returned HTTP " + connection.getResponseCode());
+            }
+        } catch (IOException error) {
+            Log.w(TAG, "Cannot return transfer progress to Minis", error);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
     }
 

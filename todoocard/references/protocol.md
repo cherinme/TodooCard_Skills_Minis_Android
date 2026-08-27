@@ -11,9 +11,11 @@ companion：
 3. companion 以 token 获取 JSON 请求，并用已信任的 256-bit `companion_key`
    做常量时间比较；首次连接需要用户在 companion UI 中确认信任。
    `send` 模式再获取经过校验的 payload。
-4. companion 完成 `scan`、`pair`、`probe`、`send` 或 `location`，将带相同
-   `request_id` 的 JSON POST 回 localhost。
-5. Python 验证 token 路径、request_id、mode 和 `ok` 后结束服务。
+4. `send` 期间 companion 每 5% 将带相同 `request_id` 的进度 JSON POST 到
+   `/progress`，Minis 用它刷新活动时间并显示进度。
+5. companion 完成 `scan`、`pair`、`probe`、`send` 或 `location`，将带相同
+   `request_id` 的 JSON POST 回 localhost `/result`。
+6. Python 验证 token 路径、request_id、mode 和 `ok` 后结束服务。
 
 服务只绑定 loopback，不接受超过 1 MB 的结果。companion 不开放 socket、不
 读取 Minis 文件系统，也不申请存储权限。
@@ -25,7 +27,9 @@ companion：
 
 - `pair` 只在目标精确 MAC 且配对窗口开启时创建 Android system bond。
 - bond 完成后必须成功读取加密 `180F/2A19` Battery Level。
-- `probe` / `send` 在配对窗口开启时拒绝执行。
+- `probe` / `send` 从 Android bonded devices 按保存的精确 MAC 直接连接，不依赖
+  厂商广播；连接后仍必须读取加密 `180F/2A19`，不能把“已保存 MAC”本身当作验证。
+- 广播路径中的 `probe` / `send` 在配对窗口开启时拒绝执行。
 
 ## Image GATT
 
@@ -43,6 +47,10 @@ companion：
 | `05` | block/start acknowledgement; status `08` is final refresh acknowledgement |
 
 Data packet: `[block index u32le][payload <= 240 bytes]`.
+
+Android companion 连接后请求 `CONNECTION_PRIORITY_HIGH` 和至少 247 字节 MTU。
+数据特征同时支持两种写法时优先 `WRITE_NO_RESPONSE`，使用 4 ms 初始节奏并在
+Android GATT 队列忙时退避重试；只有不支持无响应写入时才逐块等待写响应。
 
 ## Image pipeline
 

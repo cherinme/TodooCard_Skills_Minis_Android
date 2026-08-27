@@ -1,6 +1,6 @@
 ---
 name: todoocard
-version: 2.1.0
+version: 2.2.0
 description: >
   Android Minis 上的 TodooCard（土豆片 / NEWSTONE）六色电子纸技能族。
   用户提到土豆片、TodooCard、电子纸推送、扫描或绑定卡片时使用。
@@ -52,7 +52,10 @@ $CLI probe --device-id AA:BB:CC:DD:EE:FF --save
 
 - `scan` 只扫描，不连接、不写入。
 - `pair`、`probe`、`send` 是分离操作；不要把它们暗中合并。
-- 配对窗口开启时拒绝 `probe` 和 `send`。
+- `scan` / `pair` 依赖实体配对广播窗口；绑定并保存精确 MAC 后，`probe` / `send`
+  直接从 Android bonded devices 连接，禁止要求用户重复开启配对窗口。
+- 若用户主动开启了实体配对窗口，先完成 `pair` 或等待窗口关闭，再执行
+  `probe` / `send`；直接绑定连接不依赖广播状态。
 - 安全固件必须以加密 Battery Level 读取证明系统 bond 可用。
 - 发送失败或断连后禁止从中间 block 续传，必须重新握手并整帧发送。
 - 未收到卡片最终刷新确认，不能报告发送成功。

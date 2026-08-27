@@ -17,6 +17,8 @@ CoreBluetooth 发送器。本版本已完整移除这些依赖：
 - Android Minis 用 `android-open` 唤起同机 companion APK
 - companion 直接使用 Android BLE GATT 和系统 bond
 - 完成首次信任和权限授权后，companion 自动退回 Minis 并在前台服务中处理请求
+- 传输时请求高优先级 BLE 连接和 247+ MTU，优先使用无响应写入并回传进度心跳
+- `probe/send` 直接连接已绑定 MAC，不要求卡片重新进入配对广播模式
 - Minis 与 companion 只通过 `127.0.0.1` 一次性 token 通信
 - Android 系统定位替代 Apple Location
 - OpenStreetMap Overpass 替代 Apple Maps 餐饮搜索
@@ -59,6 +61,10 @@ companion 不申请通讯录、相册或广域存储权限。
 定位、探测和发送不会停留在 companion 界面；执行期间只显示一条静音的低优先级
 前台服务通知，任务结束后自动消失。Android 不允许可靠的后台 BLE 完全隐藏通知。
 
+`send` 默认最长等待 15 分钟，但不是盲等：APK 每 5% 向 Minis 回传一次进度；
+连续 240 秒没有进度才判定桥接停滞。成功结果包含 MTU、写入模式、数据写入耗时、
+刷新等待耗时和吞吐率，便于定位不同手机 ROM 的 BLE 性能。
+
 第一次运行 `scan` 时 companion 会显示 **Trust this Minis and continue**。
 只在你刚刚发起命令时点一次；此后 companion 用本地 256-bit key 验证请求。
 要更换 Minis 运行环境，在 Android 设置中清除 companion 的应用数据后重新信任。
@@ -96,6 +102,10 @@ $CLI eat --prepare-only
 $CLI eat
 ```
 
+`scan` 和 `pair` 用于首次发现及绑定，因此卡片需要进入实体配对广播窗口。
+完成 `probe --save` 后，日常 `probe/send/eat` 直接使用 Android 已绑定设备连接，
+不再先扫描厂商广播，也不需要重复开启配对模式。
+
 `eat` 会把当前位置坐标发送给公开的 OpenStreetMap Overpass 服务。社区数据可能
 不完整或过期，本技能只称“附近餐厅”，不保证外卖可用性。
 
@@ -104,7 +114,7 @@ $CLI eat
 - `scan`、`pair`、`probe`、`send` 分离，不暗中创建 bond 或写屏
 - 目标必须是扫描返回的精确 Android BLE MAC
 - 安全固件以加密 Battery Level 读取验证 bond，连接成功本身不算验证
-- 配对窗口开启时拒绝 probe/send
+- 若用户主动开启了实体配对窗口，先完成 `pair` 或等待窗口关闭，再执行 probe/send
 - payload 在 Minis 内生成和校验，不接受任意 `.bin` / `.qlz` 外部输入
 - 任一写失败或断连后整帧重来，禁止中间 block resume
 - 只有收到最终刷新 acknowledgement 才报告成功

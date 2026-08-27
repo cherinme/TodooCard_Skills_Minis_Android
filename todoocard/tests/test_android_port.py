@@ -7,6 +7,7 @@ import io
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -18,7 +19,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "today-eats" / "scripts"))
 
-from android_bridge import BridgeError, _BridgeServer, _validate_device_id  # noqa: E402
+from android_bridge import (  # noqa: E402
+    DEFAULT_TIMEOUTS,
+    BridgeError,
+    _BridgeServer,
+    _validate_device_id,
+)
 from places import haversine_m, parse_places  # noqa: E402
 import cli  # noqa: E402
 
@@ -62,8 +68,31 @@ class BridgeServerTests(unittest.TestCase):
         self.assertTrue(self.server.result_event.wait(1))
         self.assertTrue(self.server.result["ok"])
 
+    def test_progress_heartbeat_refreshes_bridge_activity(self) -> None:
+        before = self.server.last_activity_at
+        time.sleep(0.01)
+        body = json.dumps(
+            {
+                "request_id": "request-1",
+                "mode": "send",
+                "percent": 25,
+                "block": 228,
+            }
+        ).encode()
+        request = urllib.request.Request(
+            self.base + "/progress", data=body, method="POST"
+        )
+        with urllib.request.urlopen(request) as response:
+            self.assertEqual(response.status, 200)
+        self.assertTrue(self.server.progress_event.wait(1))
+        self.assertEqual(self.server.progress["percent"], 25)
+        self.assertGreater(self.server.last_activity_at, before)
+
 
 class ValidationTests(unittest.TestCase):
+    def test_send_timeout_allows_slow_refresh_with_heartbeat_monitoring(self) -> None:
+        self.assertEqual(DEFAULT_TIMEOUTS["send"], 900)
+
     def test_device_address_is_normalized(self) -> None:
         self.assertEqual(
             _validate_device_id("aa:bb:cc:dd:ee:ff"), "AA:BB:CC:DD:EE:FF"
@@ -113,6 +142,12 @@ class ValidationTests(unittest.TestCase):
         )
         self.assertIn("BridgeForegroundService.start(this, mode)", activity)
         self.assertIn("moveTaskToBack(true)", activity)
+        self.assertIn("requestConnectionPriority", activity)
+        self.assertIn("requestMtu", activity)
+        self.assertIn("PROPERTY_WRITE_NO_RESPONSE", activity)
+        self.assertIn("postProgress", activity)
+        self.assertIn("getBondedDevices", activity)
+        self.assertIn("connectBondedTarget", activity)
         self.assertIn("startForeground(NOTIFICATION_ID", service)
 
     def test_android_12_plus_keeps_location_permission(self) -> None:

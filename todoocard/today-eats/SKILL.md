@@ -1,6 +1,6 @@
 ---
 name: today-eats
-version: 2.1.0
+version: 2.2.0
 description: >
   在 Android Minis 中获取当前位置，从 OpenStreetMap 随机选择附近餐厅，
   生成“今天吃点啥”卡片并推送到 TodooCard。用户问今天吃什么、附近吃什么、

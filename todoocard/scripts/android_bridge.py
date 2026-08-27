@@ -8,6 +8,7 @@ import json
 import secrets
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -18,6 +19,14 @@ PACKAGE = "io.github.jiqimaooo.todoocard.androidbridge"
 SCHEME = "todoocard-minis"
 MAX_RESULT_BYTES = 1_000_000
 DEVICE_PATTERN = r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$"
+DEFAULT_TIMEOUTS = {
+    "scan": 60,
+    "pair": 140,
+    "probe": 90,
+    "send": 900,
+    "location": 70,
+}
+SEND_IDLE_TIMEOUT = 240
 
 
 class BridgeError(RuntimeError):
@@ -34,6 +43,9 @@ class _BridgeServer(ThreadingHTTPServer):
         self.payload = payload
         self.result: dict | None = None
         self.result_event = threading.Event()
+        self.progress: dict | None = None
+        self.progress_event = threading.Event()
+        self.last_activity_at = time.monotonic()
 
 
 class _BridgeHandler(BaseHTTPRequestHandler):
@@ -55,22 +67,27 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self._route("request"):
+            self.server.last_activity_at = time.monotonic()
             self._send(200, self.server.request_bytes, "application/json; charset=utf-8")
             return
         if self._route("payload") and self.server.payload is not None:
+            self.server.last_activity_at = time.monotonic()
             self._send(200, self.server.payload, "application/octet-stream")
             return
         self._send(404, b"not found", "text/plain")
 
     def do_POST(self) -> None:
-        if not self._route("result"):
+        is_result = self._route("result")
+        is_progress = self._route("progress")
+        if not is_result and not is_progress:
             self._send(404, b"not found", "text/plain")
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = 0
-        if length <= 0 or length > MAX_RESULT_BYTES:
+        maximum = MAX_RESULT_BYTES if is_result else 64 * 1024
+        if length <= 0 or length > maximum:
             self._send(413, b"invalid result length", "text/plain")
             return
         try:
@@ -82,9 +99,57 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         if result.get("request_id") != expected:
             self._send(409, b"request id mismatch", "text/plain")
             return
+        if is_progress:
+            percent = result.get("percent")
+            block = result.get("block")
+            if (
+                result.get("mode") != "send"
+                or not isinstance(percent, int)
+                or not 0 <= percent <= 100
+                or not isinstance(block, int)
+                or block < -1
+            ):
+                self._send(400, b"invalid progress", "text/plain")
+                return
+            previous = self.server.progress
+            if previous is None or percent >= previous.get("percent", -1):
+                self.server.progress = result
+            self.server.last_activity_at = time.monotonic()
+            self.server.progress_event.set()
+            self._send(200, b"ok", "text/plain")
+            return
         self.server.result = result
+        self.server.last_activity_at = time.monotonic()
         self.server.result_event.set()
         self._send(200, b"ok", "text/plain")
+
+
+def _wait_for_result(server: _BridgeServer, mode: str, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    last_percent = None
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise BridgeError(
+                "companion timed out; no final result arrived before the operation deadline"
+            )
+        if server.result_event.wait(min(1.0, remaining)):
+            return
+        if mode != "send":
+            continue
+        progress = server.progress
+        if progress is not None and progress.get("percent") != last_percent:
+            last_percent = progress["percent"]
+            print(
+                f"TodooCard transfer {last_percent}% (block {progress['block']})",
+                file=sys.stderr,
+                flush=True,
+            )
+        server.progress_event.clear()
+        if time.monotonic() - server.last_activity_at > SEND_IDLE_TIMEOUT:
+            raise BridgeError(
+                "companion stopped reporting transfer progress for 240 seconds"
+            )
 
 
 def _validate_device_id(device_id: str | None) -> str | None:
@@ -151,17 +216,8 @@ def call_bridge(
                 "cannot open the TodooCard companion app; install the bundled APK"
                 + (f": {detail}" if detail else "")
             )
-        wait_seconds = timeout or {
-            "scan": 60,
-            "pair": 140,
-            "probe": 90,
-            "send": 360,
-            "location": 70,
-        }[mode]
-        if not server.result_event.wait(wait_seconds):
-            raise BridgeError(
-                "companion timed out; check its screen for a Bluetooth, location, or pairing prompt"
-            )
+        wait_seconds = timeout or DEFAULT_TIMEOUTS[mode]
+        _wait_for_result(server, mode, wait_seconds)
         assert server.result is not None
         result = server.result
         if result.get("mode") != mode:
