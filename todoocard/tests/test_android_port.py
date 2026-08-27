@@ -130,6 +130,8 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("MessageDigest.isEqual", source)
         self.assertIn("requestedStart != 0", source)
         self.assertIn("refusing a mid-frame resume", source)
+        self.assertIn("forcing a full-frame restart at block 0", source)
+        self.assertIn("streaming && requestedStart != 0", source)
 
     def test_android_operations_return_to_minis_under_foreground_service(self) -> None:
         source_dir = (

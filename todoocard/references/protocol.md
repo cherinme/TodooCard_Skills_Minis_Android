@@ -64,3 +64,8 @@ Android companion 连接后请求 `CONNECTION_PRIORITY_HIGH` 和至少 247 字�
 
 Any GATT write failure, disconnect, invalid acknowledgement, or final timeout aborts the
 operation. Never reconnect and resume from a non-zero block.
+
+A non-zero block returned by the first `05` response can be stale state from an earlier
+aborted session. Before any data write, the companion may ignore that offset and overwrite
+the complete frame sequentially from block zero. Once the current frame has started, any
+non-zero request still aborts; the sender never continues from the requested middle block.

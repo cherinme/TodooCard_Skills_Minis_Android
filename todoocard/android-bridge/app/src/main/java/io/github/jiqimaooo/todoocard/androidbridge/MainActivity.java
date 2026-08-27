@@ -111,6 +111,7 @@ public final class MainActivity extends Activity {
     private int nextBlock;
     private int lastProgress = -1;
     private int negotiatedMtu = 23;
+    private int initialRequestedStart;
     private long queueBusySince;
     private long transferStartedAt;
     private long payloadWrittenAt;
@@ -214,6 +215,7 @@ public final class MainActivity extends Activity {
         nextBlock = 0;
         lastProgress = -1;
         negotiatedMtu = 23;
+        initialRequestedStart = 0;
         queueBusySince = 0;
         transferStartedAt = 0;
         payloadWrittenAt = 0;
@@ -908,11 +910,20 @@ public final class MainActivity extends Activity {
                 return;
             }
             int requestedStart = littleEndian(bytes, 2);
-            if (requestedStart != 0) {
+            if (streaming && requestedStart != 0) {
+                fail("TodooCard requested a non-zero start block; refusing a mid-frame resume");
+                return;
+            }
+            if (!streaming && transferStartedAt > 0 && requestedStart != 0) {
                 fail("TodooCard requested a non-zero start block; refusing a mid-frame resume");
                 return;
             }
             if (!streaming) {
+                initialRequestedStart = requestedStart;
+                if (requestedStart != 0) {
+                    log("TodooCard retained stale block " + requestedStart
+                            + "; forcing a full-frame restart at block 0");
+                }
                 nextBlock = 0;
                 streaming = true;
                 int properties = dataCharacteristic.getProperties();
@@ -1006,6 +1017,7 @@ public final class MainActivity extends Activity {
         try {
             metrics.put("blocks", nextBlock);
             metrics.put("mtu", negotiatedMtu);
+            metrics.put("stale_requested_start", initialRequestedStart);
             metrics.put("write_mode", dataWriteWithResponse
                     ? "with-response" : "without-response");
             metrics.put("connection", directBondedConnection
