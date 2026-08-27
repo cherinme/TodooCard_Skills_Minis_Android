@@ -17,7 +17,7 @@ CoreBluetooth 发送器。本版本已完整移除这些依赖：
 - Android Minis 用 `android-open` 唤起同机 companion APK
 - companion 直接使用 Android BLE GATT 和系统 bond
 - 完成首次信任和权限授权后，companion 自动退回 Minis 并在前台服务中处理请求
-- 传输时请求高优先级 BLE 连接和 247+ MTU，优先使用无响应写入并回传进度心跳
+- 传输时请求高优先级 BLE 连接和 247+ MTU，优先使用逐块确认写入并回传进度心跳
 - `probe/send` 直接连接已绑定 MAC，不要求卡片重新进入配对广播模式
 - Minis 与 companion 只通过 `127.0.0.1` 一次性 token 通信
 - Android 系统定位替代 Apple Location
@@ -64,6 +64,10 @@ companion 不申请通讯录、相册或广域存储权限。
 `send` 默认最长等待 15 分钟，但不是盲等：APK 每 5% 向 Minis 回传一次进度；
 连续 240 秒没有进度才判定桥接停滞。成功结果包含 MTU、写入模式、数据写入耗时、
 刷新等待耗时和吞吐率，便于定位不同手机 ROM 的 BLE 性能。
+
+FEF2 同时支持确认写和无响应写时默认选择确认写，确保每个块已被 GATT 接收后才
+发送下一块。只有不支持确认写时才使用 12 ms 限速的无响应写。卡片若通过 FEF1
+要求非零块续传，仍会终止整帧；不会为了速度放开可能导致错位花屏的中间续传。
 
 第一次运行 `scan` 时 companion 会显示 **Trust this Minis and continue**。
 只在你刚刚发起命令时点一次；此后 companion 用本地 256-bit key 验证请求。

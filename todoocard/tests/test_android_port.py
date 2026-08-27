@@ -145,6 +145,8 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("requestConnectionPriority", activity)
         self.assertIn("requestMtu", activity)
         self.assertIn("PROPERTY_WRITE_NO_RESPONSE", activity)
+        self.assertIn("dataWriteWithResponse = supportsWriteWithResponse", activity)
+        self.assertIn("NO_RESPONSE_PACE_MS = 12", activity)
         self.assertIn("postProgress", activity)
         self.assertIn("getBondedDevices", activity)
         self.assertIn("connectBondedTarget", activity)

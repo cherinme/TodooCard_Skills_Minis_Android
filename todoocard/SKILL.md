@@ -1,6 +1,6 @@
 ---
 name: todoocard
-version: 2.2.0
+version: 2.3.0
 description: >
   Android Minis 上的 TodooCard（土豆片 / NEWSTONE）六色电子纸技能族。
   用户提到土豆片、TodooCard、电子纸推送、扫描或绑定卡片时使用。

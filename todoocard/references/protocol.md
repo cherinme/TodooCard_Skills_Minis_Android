@@ -49,8 +49,9 @@ companion：
 Data packet: `[block index u32le][payload <= 240 bytes]`.
 
 Android companion 连接后请求 `CONNECTION_PRIORITY_HIGH` 和至少 247 字节 MTU。
-数据特征同时支持两种写法时优先 `WRITE_NO_RESPONSE`，使用 4 ms 初始节奏并在
-Android GATT 队列忙时退避重试；只有不支持无响应写入时才逐块等待写响应。
+数据特征同时支持两种写法时优先 `WRITE_TYPE_DEFAULT`，每块收到 Android GATT
+写确认后再推进，并对单块确认设置 10 秒看门狗。只有特征不支持确认写时才使用
+12 ms 节奏的 `WRITE_NO_RESPONSE`，在 Android GATT 队列忙时退避重试。
 
 ## Image pipeline
 

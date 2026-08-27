@@ -66,8 +66,8 @@ public final class MainActivity extends Activity {
     private static final int WIDTH = 528;
     private static final int HEIGHT = 792;
     private static final int DESIRED_MTU = 247;
-    private static final long NO_RESPONSE_PACE_MS = 4;
-    private static final long QUEUE_RETRY_MS = 4;
+    private static final long NO_RESPONSE_PACE_MS = 12;
+    private static final long QUEUE_RETRY_MS = 6;
     private static final long QUEUE_BUSY_TIMEOUT_MS = 10_000;
     private static final UUID SERVICE_FEF0 = uuid16("FEF0");
     private static final UUID SERVICE_FDF0 = uuid16("FDF0");
@@ -118,6 +118,7 @@ public final class MainActivity extends Activity {
     private Runnable controlTimeout;
     private Runnable finalAckTimeout;
     private Runnable mtuFallback;
+    private Runnable dataWriteTimeout;
     private final Runnable dataPump = this::pumpData;
     private final LocationListener locationListener = new LocationListener() {
         @Override
@@ -745,13 +746,16 @@ public final class MainActivity extends Activity {
         @Override
         public void onCharacteristicWrite(BluetoothGatt callbackGatt, BluetoothGattCharacteristic characteristic, int status) {
             handler.post(() -> {
+                boolean isDataWrite = dataCharacteristic != null
+                        && characteristic.getUuid().equals(dataCharacteristic.getUuid());
+                if (isDataWrite && dataWriteTimeout != null) {
+                    handler.removeCallbacks(dataWriteTimeout);
+                }
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     fail("BLE write failed with status " + status + "; full-frame retry required");
                     return;
                 }
-                if (dataCharacteristic != null
-                        && characteristic.getUuid().equals(dataCharacteristic.getUuid())
-                        && streaming) {
+                if (isDataWrite && dataWriteWithResponse && streaming) {
                     handler.removeCallbacks(dataPump);
                     pumpData();
                 }
@@ -903,12 +907,12 @@ public final class MainActivity extends Activity {
                 fail("TodooCard rejected a data block");
                 return;
             }
+            int requestedStart = littleEndian(bytes, 2);
+            if (requestedStart != 0) {
+                fail("TodooCard requested a non-zero start block; refusing a mid-frame resume");
+                return;
+            }
             if (!streaming) {
-                int requestedStart = littleEndian(bytes, 2);
-                if (requestedStart != 0) {
-                    fail("TodooCard requested a non-zero start block; refusing a mid-frame resume");
-                    return;
-                }
                 nextBlock = 0;
                 streaming = true;
                 int properties = dataCharacteristic.getProperties();
@@ -920,7 +924,7 @@ public final class MainActivity extends Activity {
                     fail("TodooCard data characteristic is not writable");
                     return;
                 }
-                dataWriteWithResponse = !supportsWriteWithoutResponse;
+                dataWriteWithResponse = supportsWriteWithResponse;
                 transferStartedAt = SystemClock.elapsedRealtime();
                 log("Starting full-frame stream at block " + nextBlock + " using " + (dataWriteWithResponse ? "write-with-response" : "paced write-without-response"));
                 postProgress(0, -1);
@@ -959,13 +963,23 @@ public final class MainActivity extends Activity {
         }
         queueBusySince = 0;
         nextBlock++;
+        if (dataWriteWithResponse) {
+            if (dataWriteTimeout != null) {
+                handler.removeCallbacks(dataWriteTimeout);
+            }
+            int pendingBlock = nextBlock - 1;
+            dataWriteTimeout = () -> fail(
+                    "Timed out waiting for GATT confirmation of block " + pendingBlock
+                            + "; full-frame retry required");
+            handler.postDelayed(dataWriteTimeout, 10_000);
+        }
         int percent = (int) Math.floor(100.0 * Math.min(payload.length, offset + length) / payload.length);
         if (percent != lastProgress && (percent % 5 == 0 || percent == 100)) {
             lastProgress = percent;
             log("Progress " + percent + "% block=" + (nextBlock - 1));
             postProgress(percent, nextBlock - 1);
         }
-        if (offset + length >= payload.length) {
+        if (!dataWriteWithResponse && offset + length >= payload.length) {
             waitForFinalAck();
             return;
         }
