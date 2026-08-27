@@ -102,6 +102,19 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("requestedStart != 0", source)
         self.assertIn("refusing a mid-frame resume", source)
 
+    def test_android_operations_return_to_minis_under_foreground_service(self) -> None:
+        source_dir = (
+            ROOT
+            / "android-bridge/app/src/main/java/io/github/jiqimaooo/todoocard/androidbridge"
+        )
+        activity = (source_dir / "MainActivity.java").read_text(encoding="utf-8")
+        service = (source_dir / "BridgeForegroundService.java").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("BridgeForegroundService.start(this, mode)", activity)
+        self.assertIn("moveTaskToBack(true)", activity)
+        self.assertIn("startForeground(NOTIFICATION_ID", service)
+
     def test_android_12_plus_keeps_location_permission(self) -> None:
         manifest = ET.parse(
             ROOT / "android-bridge/app/src/main/AndroidManifest.xml"
@@ -117,6 +130,18 @@ class ValidationTests(unittest.TestCase):
         ):
             self.assertIn(name, permissions)
             self.assertNotIn(android + "maxSdkVersion", permissions[name])
+
+        for name in (
+            "android.permission.FOREGROUND_SERVICE",
+            "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE",
+            "android.permission.FOREGROUND_SERVICE_LOCATION",
+        ):
+            self.assertIn(name, permissions)
+
+        service = manifest.find("application/service")
+        self.assertIsNotNone(service)
+        service_type = service.attrib.get(android + "foregroundServiceType", "")
+        self.assertEqual(set(service_type.split("|")), {"connectedDevice", "location"})
 
 
 class PlacesTests(unittest.TestCase):

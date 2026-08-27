@@ -82,6 +82,7 @@ public final class MainActivity extends Activity {
     private BluetoothDevice targetDevice;
     private BluetoothGattCharacteristic controlCharacteristic;
     private BluetoothGattCharacteristic dataCharacteristic;
+    private LinearLayout content;
     private TextView output;
     private Button actionButton;
     private String mode;
@@ -98,6 +99,7 @@ public final class MainActivity extends Activity {
     private boolean streaming;
     private boolean dataWriteWithResponse;
     private boolean pairingHintShown;
+    private boolean backgroundExecutionStarted;
     private int blockPayloadSize;
     private int nextBlock;
     private int lastProgress = -1;
@@ -131,6 +133,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        getWindow().setWindowAnimations(0);
         buildUi();
         BluetoothManager manager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
         adapter = manager == null ? null : manager.getAdapter();
@@ -150,6 +153,7 @@ public final class MainActivity extends Activity {
     protected void onDestroy() {
         cleanupBluetooth();
         cleanupLocation();
+        BridgeForegroundService.stop(this);
         try {
             unregisterReceiver(bondReceiver);
         } catch (IllegalArgumentException ignored) {
@@ -168,8 +172,10 @@ public final class MainActivity extends Activity {
         actionButton.setVisibility(View.GONE);
         ScrollView scroll = new ScrollView(this);
         scroll.addView(output);
-        LinearLayout content = new LinearLayout(this);
+        content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
+        content.setBackgroundColor(0xffffffff);
+        content.setVisibility(View.INVISIBLE);
         content.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
         content.addView(actionButton, new LinearLayout.LayoutParams(
@@ -193,13 +199,16 @@ public final class MainActivity extends Activity {
         nextBlock = 0;
         lastProgress = -1;
         rejectedWrites = 0;
+        backgroundExecutionStarted = false;
         output.setText("");
+        content.setVisibility(View.INVISIBLE);
         actionButton.setVisibility(View.GONE);
         actionButton.setOnClickListener(null);
 
         Uri uri = intent.getData();
         if (uri == null || !"todoocard-minis".equals(uri.getScheme())
                 || !"bridge".equals(uri.getHost()) || !"/run".equals(uri.getPath())) {
+            showInteractiveUi();
             log("Launch this bridge from the todoocard skill inside Minis for Android.");
             return;
         }
@@ -207,6 +216,7 @@ public final class MainActivity extends Activity {
         String token = uri.getQueryParameter("token");
         if (port == null || !port.matches("[0-9]{2,5}")
                 || token == null || !token.matches("[0-9a-f]{48}")) {
+            showInteractiveUi();
             log("Rejected an invalid local bridge request.");
             return;
         }
@@ -225,7 +235,10 @@ public final class MainActivity extends Activity {
             byte[] finalPayload = requestedPayload;
             handler.post(() -> startOperation(request, finalPayload));
         } catch (Exception error) {
-            handler.post(() -> log("FAILED: Cannot read the Minis request: " + error.getMessage()));
+            handler.post(() -> {
+                showInteractiveUi();
+                log("FAILED: Cannot read the Minis request: " + error.getMessage());
+            });
         }
     }
 
@@ -234,6 +247,7 @@ public final class MainActivity extends Activity {
         requestId = request.optString("request_id", null);
         targetAddress = request.optString("device_id", null);
         if (mode == null || requestId == null) {
+            showInteractiveUi();
             log("FAILED: Minis request is missing mode or request_id.");
             return;
         }
@@ -254,6 +268,7 @@ public final class MainActivity extends Activity {
         String trustedKey = getSharedPreferences("trust", MODE_PRIVATE)
                 .getString("companion_key", "");
         if (trustedKey.isEmpty()) {
+            showInteractiveUi();
             log("First connection from Minis. Approve only if you just started a TodooCard command.");
             actionButton.setVisibility(View.VISIBLE);
             actionButton.setOnClickListener(view -> {
@@ -287,8 +302,12 @@ public final class MainActivity extends Activity {
         }
         if ("location".equals(mode)) {
             if (!hasPermissions()) {
+                showInteractiveUi();
                 requestPermissions(requiredPermissions(), PERMISSION_REQUEST);
                 log("Waiting for Android location permission");
+                return;
+            }
+            if (!startBackgroundExecution()) {
                 return;
             }
             startLocation();
@@ -303,8 +322,12 @@ public final class MainActivity extends Activity {
             return;
         }
         if (!hasPermissions()) {
+            showInteractiveUi();
             requestPermissions(requiredPermissions(), PERMISSION_REQUEST);
             log("Waiting for Android Bluetooth permission");
+            return;
+        }
+        if (!startBackgroundExecution()) {
             return;
         }
         startScan();
@@ -320,11 +343,35 @@ public final class MainActivity extends Activity {
             fail("Required Android permission was denied");
             return;
         }
+        if (!startBackgroundExecution()) {
+            return;
+        }
         if ("location".equals(mode)) {
             startLocation();
         } else {
             startScan();
         }
+    }
+
+    private void showInteractiveUi() {
+        content.setVisibility(View.VISIBLE);
+    }
+
+    private boolean startBackgroundExecution() {
+        if (backgroundExecutionStarted) {
+            return true;
+        }
+        try {
+            BridgeForegroundService.start(this, mode);
+        } catch (RuntimeException error) {
+            showInteractiveUi();
+            fail("Cannot start the Android foreground operation: " + error.getMessage());
+            return false;
+        }
+        backgroundExecutionStarted = true;
+        content.setVisibility(View.INVISIBLE);
+        handler.postDelayed(() -> moveTaskToBack(true), 200);
+        return true;
     }
 
     private String[] requiredPermissions() {
@@ -874,6 +921,7 @@ public final class MainActivity extends Activity {
             new Thread(() -> postResult(body), "todoocard-result").start();
         } catch (JSONException error) {
             Log.e(TAG, "Cannot create result", error);
+            BridgeForegroundService.stop(this);
         }
     }
 
@@ -929,6 +977,10 @@ public final class MainActivity extends Activity {
             if (connection != null) {
                 connection.disconnect();
             }
+            handler.post(() -> {
+                BridgeForegroundService.stop(this);
+                finishAndRemoveTask();
+            });
         }
     }
 

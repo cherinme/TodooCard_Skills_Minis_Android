@@ -2,4 +2,6 @@
 <resources>
     <string name="app_name">TodooCard BLE Bridge</string>
     <string name="trust_minis">Trust this Minis and continue</string>
+    <string name="background_channel_name">TodooCard operations</string>
+    <string name="background_operation">Working with TodooCard in the background</string>
 </resources>

@@ -16,6 +16,7 @@ CoreBluetooth 发送器。本版本已完整移除这些依赖：
 
 - Android Minis 用 `android-open` 唤起同机 companion APK
 - companion 直接使用 Android BLE GATT 和系统 bond
+- 完成首次信任和权限授权后，companion 自动退回 Minis 并在前台服务中处理请求
 - Minis 与 companion 只通过 `127.0.0.1` 一次性 token 通信
 - Android 系统定位替代 Apple Location
 - OpenStreetMap Overpass 替代 Apple Maps 餐饮搜索
@@ -53,6 +54,10 @@ APK 的完整源码在 `todoocard/android-bridge/`，可自行审计和重建。
 - **定位**：仅“今天吃点啥”使用
 
 companion 不申请通讯录、相册或广域存储权限。
+
+首次信任、运行时权限和 Android 系统配对必须显示界面。完成这些设置后，扫描、
+定位、探测和发送不会停留在 companion 界面；执行期间只显示一条静音的低优先级
+前台服务通知，任务结束后自动消失。Android 不允许可靠的后台 BLE 完全隐藏通知。
 
 第一次运行 `scan` 时 companion 会显示 **Trust this Minis and continue**。
 只在你刚刚发起命令时点一次；此后 companion 用本地 256-bit key 验证请求。

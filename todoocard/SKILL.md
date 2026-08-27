@@ -1,6 +1,6 @@
 ---
 name: todoocard
-version: 2.0.0
+version: 2.1.0
 description: >
   Android Minis 上的 TodooCard（土豆片 / NEWSTONE）六色电子纸技能族。
   用户提到土豆片、TodooCard、电子纸推送、扫描或绑定卡片时使用。
@@ -33,6 +33,8 @@ compatibility: >
    刚发起命令时确认；之后用本地 256-bit key 认证每次请求。
 4. 在 Android 设置中允许 companion 的“附近设备”和定位权限。不要要求
    Minis 无障碍服务，本技能不靠 UI 点击控制 BLE。
+   完成首次信任和权限授权后，companion 会立即退回 Minis，在前台服务中处理
+   扫描、定位、探测和发送；任务期间出现静音系统通知属于 Android 强制行为。
 5. 依次执行：
 
 ```bash
