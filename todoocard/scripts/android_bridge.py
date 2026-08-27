@@ -223,7 +223,11 @@ def call_bridge(
         if result.get("mode") != mode:
             raise BridgeError("companion returned a mismatched operation")
         if result.get("ok") is not True:
-            raise BridgeError(str(result.get("message") or "companion operation failed"))
+            message = str(result.get("message") or "companion operation failed")
+            version = result.get("companion_version")
+            if version:
+                message += f" (companion {version})"
+            raise BridgeError(message)
         return result
     finally:
         server.shutdown()

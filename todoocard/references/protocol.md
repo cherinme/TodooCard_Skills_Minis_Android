@@ -44,7 +44,7 @@ companion：
 | `01` | request block size; typical response `01 F4 00`, payload 240 bytes |
 | `02` | `02` + payload length u32le + flag `01` |
 | `03` | start full-frame transfer |
-| `05` | block/start acknowledgement; status `08` is final refresh acknowledgement |
+| `05` | next requested block / flow-control acknowledgement; status `08` is final refresh acknowledgement |
 
 Data packet: `[block index u32le][payload <= 240 bytes]`.
 
@@ -67,5 +67,8 @@ operation. Never reconnect and resume from a non-zero block.
 
 A non-zero block returned by the first `05` response can be stale state from an earlier
 aborted session. Before any data write, the companion may ignore that offset and overwrite
-the complete frame sequentially from block zero. Once the current frame has started, any
-non-zero request still aborts; the sender never continues from the requested middle block.
+the complete frame sequentially from block zero. During streaming, `05` normally returns
+the same index as the sender's next unsent block; that is sequential flow control, not a
+resume request. A lower index would require retransmitting old data and a higher index would
+skip unsent data, so either mismatch aborts the operation and requires a new full-frame
+transfer.

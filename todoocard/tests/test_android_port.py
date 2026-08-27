@@ -122,16 +122,19 @@ class ValidationTests(unittest.TestCase):
             finally:
                 cli.CFG_DIR, cli.CFG_PATH = original_dir, original_path
 
-    def test_android_source_keeps_trust_and_no_resume_guards(self) -> None:
+    def test_android_source_accepts_sequential_flow_control_without_resuming(self) -> None:
         source = (
             ROOT
             / "android-bridge/app/src/main/java/io/github/jiqimaooo/todoocard/androidbridge/MainActivity.java"
         ).read_text(encoding="utf-8")
         self.assertIn("MessageDigest.isEqual", source)
-        self.assertIn("requestedStart != 0", source)
-        self.assertIn("refusing a mid-frame resume", source)
+        self.assertIn("requestedBlock < nextBlock", source)
+        self.assertIn("requestedBlock > nextBlock", source)
+        self.assertIn("Flow control confirmed next block", source)
+        self.assertIn("refusing a mid-frame retransmit", source)
+        self.assertIn("refusing to skip unsent blocks", source)
         self.assertIn("forcing a full-frame restart at block 0", source)
-        self.assertIn("streaming && requestedStart != 0", source)
+        self.assertIn("companion_version", source)
 
     def test_android_operations_return_to_minis_under_foreground_service(self) -> None:
         source_dir = (

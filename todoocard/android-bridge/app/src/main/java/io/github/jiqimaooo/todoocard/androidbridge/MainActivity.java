@@ -752,6 +752,7 @@ public final class MainActivity extends Activity {
                         && characteristic.getUuid().equals(dataCharacteristic.getUuid());
                 if (isDataWrite && dataWriteTimeout != null) {
                     handler.removeCallbacks(dataWriteTimeout);
+                    dataWriteTimeout = null;
                 }
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     fail("BLE write failed with status " + status + "; full-frame retry required");
@@ -909,19 +910,38 @@ public final class MainActivity extends Activity {
                 fail("TodooCard rejected a data block");
                 return;
             }
-            int requestedStart = littleEndian(bytes, 2);
-            if (streaming && requestedStart != 0) {
-                fail("TodooCard requested a non-zero start block; refusing a mid-frame resume");
+            int requestedBlock = littleEndian(bytes, 2);
+            if (streaming) {
+                if (requestedBlock < nextBlock) {
+                    fail("TodooCard requested block " + requestedBlock
+                            + " but the next unsent block is " + nextBlock
+                            + "; refusing a mid-frame retransmit; full-frame retry required");
+                    return;
+                }
+                if (requestedBlock > nextBlock) {
+                    fail("TodooCard requested block " + requestedBlock
+                            + " but the next unsent block is " + nextBlock
+                            + "; refusing to skip unsent blocks; full-frame retry required");
+                    return;
+                }
+                log("Flow control confirmed next block " + requestedBlock);
                 return;
             }
-            if (!streaming && transferStartedAt > 0 && requestedStart != 0) {
-                fail("TodooCard requested a non-zero start block; refusing a mid-frame resume");
+            if (transferStartedAt > 0) {
+                if (payloadWrittenAt > 0 && requestedBlock == nextBlock) {
+                    log("Flow control confirmed all " + requestedBlock
+                            + " blocks; waiting for final refresh acknowledgement");
+                    return;
+                }
+                fail("TodooCard requested block " + requestedBlock
+                        + " after payload streaming ended; expected " + nextBlock
+                        + "; full-frame retry required");
                 return;
             }
             if (!streaming) {
-                initialRequestedStart = requestedStart;
-                if (requestedStart != 0) {
-                    log("TodooCard retained stale block " + requestedStart
+                initialRequestedStart = requestedBlock;
+                if (requestedBlock != 0) {
+                    log("TodooCard retained stale block " + requestedBlock
                             + "; forcing a full-frame restart at block 0");
                 }
                 nextBlock = 0;
@@ -1043,6 +1063,7 @@ public final class MainActivity extends Activity {
             progress.put("mode", mode);
             progress.put("percent", percent);
             progress.put("block", block);
+            progress.put("companion_version", BuildConfig.VERSION_NAME);
             byte[] body = progress.toString().getBytes(StandardCharsets.UTF_8);
             new Thread(() -> postProgressBody(body),
                     "todoocard-progress-" + percent).start();
@@ -1118,6 +1139,7 @@ public final class MainActivity extends Activity {
             result.put("ok", ok);
             result.put("mode", mode);
             result.put("message", message);
+            result.put("companion_version", BuildConfig.VERSION_NAME);
             if (extra != null) {
                 java.util.Iterator<String> keys = extra.keys();
                 while (keys.hasNext()) {
